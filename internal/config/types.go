@@ -61,6 +61,7 @@ type ButtonNode struct {
 	ID       string            `yaml:"id"`
 	Function string            `yaml:"function"`
 	Confirm  bool              `yaml:"confirm"`
+	Prompt   string            `yaml:"prompt"`
 	Timeout  *Duration         `yaml:"timeout"`
 	WorkDir  string            `yaml:"workdir"`
 	Env      map[string]string `yaml:"env"`
@@ -82,7 +83,7 @@ type rawButtonNode ButtonNode
 
 var buttonNodeFields = map[string]struct{}{
 	"name": {}, "type": {}, "icon": {}, "id": {}, "function": {},
-	"confirm": {}, "timeout": {}, "workdir": {}, "env": {},
+	"confirm": {}, "prompt": {}, "timeout": {}, "workdir": {}, "env": {},
 	"columns": {}, "output": {}, "items": {}, "command": {}, "path": {}, "args": {},
 }
 

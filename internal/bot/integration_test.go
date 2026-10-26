@@ -669,6 +669,128 @@ func TestRunCommandPromptAndExecutesNextText(t *testing.T) {
 	require.Contains(t, joined, "Button: Run Command")
 }
 
+func TestButtonWithPromptTakesInput(t *testing.T) {
+	srv := &apiServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	var gotCommand string
+	fake := &executor.FakeExecutor{
+		Fn: func(_ context.Context, spec executor.Spec) (executor.Result, error) {
+			gotCommand = spec.Command
+			return executor.Result{ExitCode: 0, Stdout: "ping ok"}, nil
+		},
+	}
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			API:          ts.URL,
+			BotToken:     "123:ABC",
+			AllowedUsers: []string{"42"},
+		},
+		Menu: []config.ButtonNode{
+			{
+				Name:     "Ping Host",
+				Type:     "button",
+				Function: "command",
+				Prompt:   "Enter hostname or IP to ping:",
+				Command:  "ping -c 4 {{.input}}",
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	app := bot.NewApp(cfg, function.NewRegistry(), fake, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, ts.Client()),
+		tgbot.WithServerURL(ts.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "Ping Host"))
+
+	srv.mu.Lock()
+	require.Contains(t, visibleTexts(srv), "Enter hostname or IP to ping:")
+	lastMsg := srv.messages[len(srv.messages)-1]
+	rm := fmt.Sprintf("%v", lastMsg["reply_markup"])
+	require.Contains(t, rm, "force_reply")
+	require.Contains(t, rm, "Enter hostname or IP to ping:")
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "1.1.1.1"))
+
+	require.Equal(t, "ping -c 4 1.1.1.1", gotCommand)
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	joined := strings.Join(visibleTexts(srv), "\n")
+	require.Contains(t, joined, "Button: Ping Host")
+	require.Contains(t, joined, "ping ok")
+}
+
+func TestButtonWithPromptAndConfirm(t *testing.T) {
+	srv := &apiServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	var gotCommand string
+	fake := &executor.FakeExecutor{
+		Fn: func(_ context.Context, spec executor.Spec) (executor.Result, error) {
+			gotCommand = spec.Command
+			return executor.Result{ExitCode: 0, Stdout: "reboot ok"}, nil
+		},
+	}
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			API:          ts.URL,
+			BotToken:     "123:ABC",
+			AllowedUsers: []string{"42"},
+		},
+		Menu: []config.ButtonNode{
+			{
+				Name:     "Reboot Server",
+				Type:     "button",
+				Function: "command",
+				Prompt:   "Reason for reboot:",
+				Confirm:  true,
+				Command:  "echo rebooting: {{.input}}",
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	app := bot.NewApp(cfg, function.NewRegistry(), fake, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, ts.Client()),
+		tgbot.WithServerURL(ts.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "Reboot Server"))
+
+	srv.mu.Lock()
+	require.Contains(t, visibleTexts(srv), "Reason for reboot:")
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "kernel update"))
+
+	srv.mu.Lock()
+	require.Contains(t, visibleTexts(srv), "Confirm: Reboot Server (kernel update) ?")
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "✅ Yes"))
+
+	require.Equal(t, "echo rebooting: kernel update", gotCommand)
+}
+
 func TestRunCommandHomeCancelsAwaiting(t *testing.T) {
 	srv := &apiServer{}
 	ts := httptest.NewServer(srv)

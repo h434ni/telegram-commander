@@ -25,7 +25,7 @@ var ReservedNames = map[string]struct{}{
 
 var reservedParamNames = map[string]struct{}{
 	"name": {}, "type": {}, "icon": {}, "id": {}, "function": {},
-	"confirm": {}, "timeout": {}, "workdir": {}, "env": {},
+	"confirm": {}, "prompt": {}, "timeout": {}, "workdir": {}, "env": {},
 	"columns": {}, "items": {}, "output": {},
 }
 

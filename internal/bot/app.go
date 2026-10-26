@@ -41,17 +41,19 @@ type App struct {
 }
 
 type userMenu struct {
-	nodeID string
-	page   int
+	nodeID           string
+	page             int
 	// messageID is the last navigation screen (menu, confirm, or run prompt).
 	// Running and command results are not stored here, so they stay in the chat.
-	messageID int
-	chatID    int64
-	awaiting  bool
+	messageID        int
+	chatID           int64
+	awaiting         bool
+	awaitingButtonID string
 }
 
 type confirmWait struct {
 	buttonID string
+	input    string
 	expires  time.Time
 }
 
@@ -305,17 +307,33 @@ func (a *App) handleMenuText(ctx context.Context, b *bot.Bot, msg *models.Messag
 	text := strings.TrimSpace(msg.Text)
 	chatID := msg.Chat.ID
 	userID := msg.From.ID
-	if text == "" || strings.HasPrefix(text, "/") {
+	if text == "" {
 		a.showStatus(ctx, b, chatID, userID, "Use /start to open the menu.")
+		return
+	}
+
+	if text == "/cancel" {
+		a.setAwaiting(userID, false)
+		a.clearConfirm(userID)
+		st := a.getNav(userID)
+		a.sendMenu(ctx, b, chatID, userID, st.nodeID, st.page)
 		return
 	}
 
 	switch text {
 	case btnHome:
+		a.setAwaiting(userID, false)
 		a.applyAction(ctx, b, chatID, msg.From, cbHome)
 		return
 	case btnBack:
+		a.setAwaiting(userID, false)
 		a.applyAction(ctx, b, chatID, msg.From, cbBack)
+		return
+	case btnCancel:
+		a.setAwaiting(userID, false)
+		a.clearConfirm(userID)
+		st := a.getNav(userID)
+		a.sendMenu(ctx, b, chatID, userID, st.nodeID, st.page)
 		return
 	case btnRunCommand:
 		if a.Cfg.EnableRunCommand {
@@ -325,8 +343,25 @@ func (a *App) handleMenuText(ctx context.Context, b *bot.Bot, msg *models.Messag
 	}
 
 	if a.isAwaiting(userID) {
+		buttonID := a.getAwaitingButtonID(userID)
 		a.setAwaiting(userID, false)
+		if buttonID != "" {
+			node := a.Index.ByID[buttonID]
+			if node != nil {
+				if node.Confirm {
+					a.showConfirm(ctx, b, chatID, userID, node, text)
+					return
+				}
+				a.executeButton(ctx, b, chatID, msg.From, node, text)
+				return
+			}
+		}
 		a.executeRawCommand(ctx, b, chatID, msg.From, text)
+		return
+	}
+
+	if strings.HasPrefix(text, "/") {
+		a.showStatus(ctx, b, chatID, userID, "Use /start to open the menu.")
 		return
 	}
 
@@ -388,7 +423,7 @@ func (a *App) applyAction(ctx context.Context, b *bot.Bot, chatID int64, user *m
 		}
 		a.sendMenu(ctx, b, chatID, userID, st.nodeID, st.page+1)
 	case data == cbYes:
-		buttonID, ok := a.consumeConfirm(userID)
+		buttonID, input, ok := a.consumeConfirm(userID)
 		if !ok {
 			a.showStatus(ctx, b, chatID, userID, "Confirmation expired. Please try again.")
 			return
@@ -397,7 +432,7 @@ func (a *App) applyAction(ctx context.Context, b *bot.Bot, chatID int64, user *m
 		if node == nil {
 			return
 		}
-		a.executeButton(ctx, b, chatID, user, node)
+		a.executeButton(ctx, b, chatID, user, node, input)
 	case data == cbCancel:
 		a.clearConfirm(userID)
 		a.sendMenu(ctx, b, chatID, userID, st.nodeID, st.page)
@@ -415,11 +450,15 @@ func (a *App) applyAction(ctx context.Context, b *bot.Bot, chatID int64, user *m
 		if node == nil || node.Type != "button" {
 			return
 		}
-		if node.Confirm {
-			a.showConfirm(ctx, b, chatID, userID, node)
+		if node.Prompt != "" {
+			a.promptButtonInput(ctx, b, chatID, userID, node)
 			return
 		}
-		a.executeButton(ctx, b, chatID, user, node)
+		if node.Confirm {
+			a.showConfirm(ctx, b, chatID, userID, node, "")
+			return
+		}
+		a.executeButton(ctx, b, chatID, user, node, "")
 	}
 }
 
@@ -455,7 +494,7 @@ func (a *App) showStatus(ctx context.Context, b *bot.Bot, chatID, userID int64, 
 
 // sendNav shows a navigation screen (menu, confirm, or run prompt) and
 // deletes the previous navigation screen so those titles do not pile up.
-func (a *App) sendNav(ctx context.Context, b *bot.Bot, chatID, userID int64, text string, reply *models.ReplyKeyboardMarkup, parseMode models.ParseMode) {
+func (a *App) sendNav(ctx context.Context, b *bot.Bot, chatID, userID int64, text string, reply models.ReplyMarkup, parseMode models.ParseMode) {
 	msg := a.sendKeep(ctx, b, chatID, text, reply, parseMode)
 	if msg == nil {
 		return
@@ -469,7 +508,7 @@ func (a *App) sendNav(ctx context.Context, b *bot.Bot, chatID, userID int64, tex
 
 // sendKeep sends a message with a reply keyboard and leaves older messages
 // in the chat (used for Running and command results).
-func (a *App) sendKeep(ctx context.Context, b *bot.Bot, chatID int64, text string, reply *models.ReplyKeyboardMarkup, parseMode models.ParseMode) *models.Message {
+func (a *App) sendKeep(ctx context.Context, b *bot.Bot, chatID int64, text string, reply models.ReplyMarkup, parseMode models.ParseMode) *models.Message {
 	params := &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
@@ -538,11 +577,22 @@ func (a *App) setMessageID(userID, chatID int64, messageID int) {
 }
 
 func (a *App) setAwaiting(userID int64, v bool) {
+	a.setAwaitingButton(userID, v, "")
+}
+
+func (a *App) setAwaitingButton(userID int64, v bool, buttonID string) {
 	a.navMu.Lock()
 	st := a.nav[userID]
 	st.awaiting = v
+	st.awaitingButtonID = buttonID
 	a.nav[userID] = st
 	a.navMu.Unlock()
+}
+
+func (a *App) getAwaitingButtonID(userID int64) string {
+	a.navMu.Lock()
+	defer a.navMu.Unlock()
+	return a.nav[userID].awaitingButtonID
 }
 
 func (a *App) isAwaiting(userID int64) bool {
@@ -555,28 +605,47 @@ func (a *App) promptRunCommand(ctx context.Context, b *bot.Bot, chatID, userID i
 	a.sendNav(ctx, b, chatID, userID, "Type your command and send it.", ResultReplyKeyboard(st.nodeID != "", true), "")
 }
 
-func (a *App) showConfirm(ctx context.Context, b *bot.Bot, chatID, userID int64, node *Node) {
+func (a *App) promptButtonInput(ctx context.Context, b *bot.Bot, chatID, userID int64, node *Node) {
+	a.setAwaitingButton(userID, true, node.ID)
+	placeholder := node.Prompt
+	if len(placeholder) > 64 {
+		placeholder = placeholder[:64]
+	}
+	forceReply := &models.ForceReply{
+		ForceReply:            true,
+		InputFieldPlaceholder: placeholder,
+		Selective:             true,
+	}
+	a.sendNav(ctx, b, chatID, userID, node.Prompt, forceReply, "")
+}
+
+func (a *App) showConfirm(ctx context.Context, b *bot.Bot, chatID, userID int64, node *Node, input string) {
 	a.confirmMu.Lock()
 	a.confirms[userID] = confirmWait{
 		buttonID: node.ID,
+		input:    input,
 		expires:  time.Now().Add(a.Cfg.ConfirmTTL.Duration),
 	}
 	a.confirmMu.Unlock()
 
 	st := a.getNav(userID)
 	hasBack := st.nodeID != ""
-	a.sendNav(ctx, b, chatID, userID, fmt.Sprintf("Confirm: %s ?", node.Label()), ConfirmReplyKeyboard(hasBack, a.Cfg.EnableRunCommand), "")
+	prompt := fmt.Sprintf("Confirm: %s ?", node.Label())
+	if input != "" {
+		prompt = fmt.Sprintf("Confirm: %s (%s) ?", node.Label(), input)
+	}
+	a.sendNav(ctx, b, chatID, userID, prompt, ConfirmReplyKeyboard(hasBack, a.Cfg.EnableRunCommand), "")
 }
 
-func (a *App) consumeConfirm(userID int64) (string, bool) {
+func (a *App) consumeConfirm(userID int64) (string, string, bool) {
 	a.confirmMu.Lock()
 	defer a.confirmMu.Unlock()
 	w, ok := a.confirms[userID]
 	delete(a.confirms, userID)
 	if !ok || !time.Now().Before(w.expires) {
-		return "", false
+		return "", "", false
 	}
-	return w.buttonID, true
+	return w.buttonID, w.input, true
 }
 
 func (a *App) clearConfirm(userID int64) {
@@ -585,13 +654,25 @@ func (a *App) clearConfirm(userID int64) {
 	a.confirmMu.Unlock()
 }
 
-func (a *App) executeButton(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node) {
+func (a *App) executeButton(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node, input string) {
 	def, ok := a.Registry.GetCaseInsensitive(node.Function)
 	if !ok {
 		a.showStatus(ctx, b, chatID, user.ID, fmt.Sprintf("Unknown function %q", node.Function))
 		return
 	}
 	params := function.ButtonParams(node.Raw)
+	if input != "" {
+		if params == nil {
+			params = make(map[string]string)
+		}
+		params["input"] = input
+		if cmd, ok := params["command"]; ok {
+			params["command"] = substituteInput(cmd, input)
+		}
+		if args, ok := params["args"]; ok {
+			params["args"] = substituteInput(args, input)
+		}
+	}
 	cmd, err := def.RenderRun(params)
 	if err != nil {
 		a.showStatus(ctx, b, chatID, user.ID, "Failed to build command: "+err.Error())
@@ -615,7 +696,11 @@ func (a *App) executeButton(ctx context.Context, b *bot.Bot, chatID int64, user 
 	}
 
 	a.deleteNavMessage(ctx, b, chatID, user.ID)
-	a.showStatus(ctx, b, chatID, user.ID, fmt.Sprintf("Running: %s …", node.Label()))
+	label := node.Label()
+	if input != "" {
+		label = fmt.Sprintf("%s (%s)", label, input)
+	}
+	a.showStatus(ctx, b, chatID, user.ID, fmt.Sprintf("Running: %s …", label))
 
 	res, err := a.Exec.Run(ctx, executor.Spec{
 		UserID:   user.ID,
@@ -630,6 +715,19 @@ func (a *App) executeButton(ctx context.Context, b *bot.Bot, chatID int64, user 
 	})
 
 	a.deliverResult(ctx, b, chatID, user.ID, node, res, err)
+}
+
+func substituteInput(templateStr, input string) string {
+	if strings.Contains(templateStr, "{{.input}}") {
+		return strings.ReplaceAll(templateStr, "{{.input}}", input)
+	}
+	if strings.Contains(templateStr, "%INPUT%") {
+		return strings.ReplaceAll(templateStr, "%INPUT%", input)
+	}
+	if strings.Contains(templateStr, "$INPUT") {
+		return strings.ReplaceAll(templateStr, "$INPUT", input)
+	}
+	return templateStr + " " + input
 }
 
 func (a *App) executeRawCommand(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, command string) {

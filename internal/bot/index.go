@@ -20,6 +20,7 @@ type Node struct {
 	Icon     string
 	Function string
 	Confirm  bool
+	Prompt   string
 	Timeout  time.Duration
 	WorkDir  string
 	Env      map[string]string
@@ -78,6 +79,7 @@ func walk(idx *Index, n *config.ButtonNode, parentID, id string, defaultColumns 
 		Icon:     n.Icon,
 		Function: n.Function,
 		Confirm:  n.Confirm,
+		Prompt:   n.Prompt,
 		WorkDir:  n.WorkDir,
 		Env:      n.Env,
 		Columns:  cols,
