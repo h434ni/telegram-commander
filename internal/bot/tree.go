@@ -393,6 +393,10 @@ func (a *App) buildTreeRichMessageHTML(dirPath string) (string, error) {
 	var dirs []os.DirEntry
 	var files []os.DirEntry
 	for _, e := range entries {
+		// Hide dot-folders and dot-files
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
 		if e.IsDir() {
 			dirs = append(dirs, e)
 		} else {
@@ -432,6 +436,9 @@ func (a *App) buildTreeRichMessageHTML(dirPath string) (string, error) {
 			if subEntries, sErr := os.ReadDir(subDirPath); sErr == nil && len(subEntries) > 0 {
 				var subDirs []os.DirEntry
 				for _, se := range subEntries {
+					if strings.HasPrefix(se.Name(), ".") {
+						continue
+					}
 					if se.IsDir() {
 						subDirs = append(subDirs, se)
 					}

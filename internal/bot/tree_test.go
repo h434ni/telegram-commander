@@ -68,7 +68,8 @@ func TestBuildTreeRichMessageHTML(t *testing.T) {
 	require.Contains(t, html, "📁 <b>beta</b>")
 	require.Contains(t, html, "📁 nested1")
 	require.Contains(t, html, "📄 file1.txt")
-	require.Contains(t, html, "3 directories, 2 files")
+	require.Contains(t, html, "2 directories, 2 files")
+	require.NotContains(t, html, ".config")
 
 	// Rich text <tg-button> tags
 	tokAlpha := app.TreeState.GetToken(sub2)
