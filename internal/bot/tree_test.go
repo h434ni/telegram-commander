@@ -40,7 +40,7 @@ func TestTreeStateManager(t *testing.T) {
 	require.Equal(t, 0, mgr.GetUserMessageID(42))
 }
 
-func TestBuildTreeRichText(t *testing.T) {
+func TestBuildTreeRichMessageHTML(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create subdirectories and files
@@ -59,35 +59,36 @@ func TestBuildTreeRichText(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file2.log"), []byte("log"), 0o644))
 
 	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
-	text, err := app.buildTreeRichText(tempDir)
+	html, err := app.buildTreeRichMessageHTML(tempDir)
 	require.NoError(t, err)
 
-	require.Contains(t, text, "Folder Explorer")
-	require.Contains(t, text, tempDir)
-	require.Contains(t, text, "📁 <b>alpha</b>")
-	require.Contains(t, text, "📁 <b>beta</b>")
-	require.Contains(t, text, "📁 nested1")
-	require.Contains(t, text, "📄 file1.txt")
-	require.Contains(t, text, "3 directories, 2 files")
+	require.Contains(t, html, "Folder Explorer")
+	require.Contains(t, html, tempDir)
+	require.Contains(t, html, "📁 <b>alpha</b>")
+	require.Contains(t, html, "📁 <b>beta</b>")
+	require.Contains(t, html, "📁 nested1")
+	require.Contains(t, html, "📄 file1.txt")
+	require.Contains(t, html, "3 directories, 2 files")
 
-	// Rich text commands in front of each directory
+	// Rich text <tg-button> tags
 	tokAlpha := app.TreeState.GetToken(sub2)
 	tokBeta := app.TreeState.GetToken(sub1)
-	require.Contains(t, text, "/cd_"+tokAlpha)
-	require.Contains(t, text, "/cd_"+tokBeta)
+	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:cd:`+tokAlpha+`">Open</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:cd:`+tokBeta+`">Open</tg-button>`)
 
-	// Navigation commands
-	require.Contains(t, text, "<b>Up:</b> /cd_up")
-	require.Contains(t, text, "<b>Home:</b> /cd_home")
-	require.Contains(t, text, "<b>Refresh:</b> /cd_ref")
-	require.Contains(t, text, "<b>Close:</b> /cd_close")
+	// Navigation buttons in <tg-button-row>
+	require.Contains(t, html, "<tg-button-row")
+	require.Contains(t, html, ">⬆️ Up</tg-button>")
+	require.Contains(t, html, ">🏠 Home</tg-button>")
+	require.Contains(t, html, ">🔄 Refresh</tg-button>")
+	require.Contains(t, html, ">❌ Close</tg-button>")
 }
 
-func TestBuildTreeRichTextEmptyDir(t *testing.T) {
+func TestBuildTreeRichMessageHTMLEmptyDir(t *testing.T) {
 	tempDir := t.TempDir()
 	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
-	text, err := app.buildTreeRichText(tempDir)
+	html, err := app.buildTreeRichMessageHTML(tempDir)
 	require.NoError(t, err)
-	require.Contains(t, text, "(empty directory)")
-	require.Contains(t, text, "0 directories, 0 files")
+	require.Contains(t, html, "(empty directory)")
+	require.Contains(t, html, "0 directories, 0 files")
 }

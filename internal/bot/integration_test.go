@@ -72,14 +72,50 @@ func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"chat":       map[string]any{"id": 10, "type": "private"},
 			"text":       m["text"],
 		})
+	case strings.HasSuffix(path, "/sendRichMessage"):
+		if s.injectSendFailure(w) {
+			return
+		}
+		id := len(s.messages) + 1
+		text := r.FormValue("text")
+		if text == "" && r.FormValue("rich_message") != "" {
+			var rm struct {
+				HTML string `json:"html"`
+			}
+			_ = json.Unmarshal([]byte(r.FormValue("rich_message")), &rm)
+			text = rm.HTML
+		}
+		m := map[string]any{
+			"chat_id":      r.FormValue("chat_id"),
+			"text":         text,
+			"rich_message": r.FormValue("rich_message"),
+			"message_id":   id,
+			"kind":         "send_rich",
+		}
+		s.messages = append(s.messages, m)
+		writeOK(w, map[string]any{
+			"message_id": id,
+			"date":       time.Now().Unix(),
+			"chat":       map[string]any{"id": 10, "type": "private"},
+			"text":       m["text"],
+		})
 	case strings.HasSuffix(path, "/answerCallbackQuery"):
 		writeOK(w, true)
 	case strings.HasSuffix(path, "/editMessageText"):
+		text := r.FormValue("text")
+		if text == "" && r.FormValue("rich_message") != "" {
+			var rm struct {
+				HTML string `json:"html"`
+			}
+			_ = json.Unmarshal([]byte(r.FormValue("rich_message")), &rm)
+			text = rm.HTML
+		}
 		m := map[string]any{
-			"chat_id":    r.FormValue("chat_id"),
-			"message_id": r.FormValue("message_id"),
-			"text":       r.FormValue("text"),
-			"kind":       "edit",
+			"chat_id":      r.FormValue("chat_id"),
+			"message_id":   r.FormValue("message_id"),
+			"text":         text,
+			"rich_message": r.FormValue("rich_message"),
+			"kind":         "edit",
 		}
 		s.messages = append(s.messages, m)
 		writeOK(w, map[string]any{
@@ -1392,8 +1428,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	tokSub := app.TreeState.GetToken(subDir)
 
-	// 2. Tap rich text command /cd_<token> for subfolder
-	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_"+tokSub))
+	// 2. Click in-message <tg-button> for subfolder
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cd:"+tokSub))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -1402,8 +1438,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
 
-	// 3. Tap /cd_up
-	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_up"))
+	// 3. Click Up in-message button
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:up:"+tokSub))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -1412,15 +1448,11 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "subfolder")
 
-	// 4. Tap /cd_ref
-	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_ref"))
-
-	// 5. Tap /cd_close
-	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_close"))
+	// 4. Click Close in-message button
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
-	require.Greater(t, srv.deletes, 0, "incoming slash commands should be deleted")
 	srv.mu.Unlock()
 
 	joined = strings.Join(msgs, "\n")

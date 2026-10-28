@@ -308,6 +308,11 @@ func (a *App) handleCallback(ctx context.Context, b *bot.Bot, update *models.Upd
 		return
 	}
 
+	if strings.HasPrefix(cq.Data, cbTreePrefix) {
+		a.handleTreeCallback(ctx, b, cq)
+		return
+	}
+
 	_ = a.telegramCall(ctx, chatID, func() error {
 		_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: cq.ID,

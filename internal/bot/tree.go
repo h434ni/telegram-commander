@@ -17,11 +17,18 @@ import (
 )
 
 const (
+	cbTreePrefix = "t:"
+	cbTreeCD     = "t:cd:"
+	cbTreeUp     = "t:up:"
+	cbTreeHome   = "t:home"
+	cbTreeRef    = "t:ref:"
+	cbTreeClose  = "t:close"
+
 	treeMaxLines = 30 // max lines of directory entries
 )
 
-// TreeStateManager maps directory paths to short random hex tokens so commands
-// like /cd_a1b2 can be tapped in rich text directly inside the message.
+// TreeStateManager maps directory paths to short tokens so callback_data
+// stays well below Telegram's 64-byte limit.
 type TreeStateManager struct {
 	mu           sync.RWMutex
 	rnd          *rand.Rand
@@ -58,7 +65,7 @@ func (m *TreeStateManager) Home() string {
 	return m.homePath
 }
 
-// GetToken returns an existing or newly allocated random token for path.
+// GetToken returns an existing or newly allocated token for path.
 func (m *TreeStateManager) GetToken(path string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -68,7 +75,6 @@ func (m *TreeStateManager) GetToken(path string) string {
 		return tok
 	}
 
-	// Generate a unique 4-character random hex token
 	var tok string
 	for {
 		tok = fmt.Sprintf("%04x", m.rnd.Intn(0x10000))
@@ -80,7 +86,6 @@ func (m *TreeStateManager) GetToken(path string) string {
 	m.paths[tok] = clean
 	m.tokens[clean] = tok
 
-	// Cap memory in long-running bot instances
 	if len(m.paths) > 2000 {
 		m.paths = make(map[string]string)
 		m.tokens = make(map[string]string)
@@ -151,7 +156,7 @@ func (a *App) isTreeButton(node *Node) bool {
 	return false
 }
 
-// startTreeExplorer initiates the tree explorer message.
+// startTreeExplorer initiates the tree explorer message using rich text format with in-message buttons.
 func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node) {
 	startPath := ""
 	if node.Path != "" {
@@ -173,17 +178,18 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 	}
 
 	a.TreeState.SetUserPath(user.ID, absPath)
-	htmlText, err := a.buildTreeRichText(absPath)
+	richHTML, err := a.buildTreeRichMessageHTML(absPath)
 	if err != nil {
 		a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
 		return
 	}
 
 	_ = a.telegramCall(ctx, chatID, func() error {
-		msg, sendErr := b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:    chatID,
-			Text:      htmlText,
-			ParseMode: models.ParseModeHTML,
+		msg, sendErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+			ChatID: chatID,
+			RichMessage: models.InputRichMessage{
+				HTML: richHTML,
+			},
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(user.ID, msg.ID)
@@ -192,13 +198,112 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 	})
 }
 
-// handleTreeCommand routes in-message rich text slash commands like /cd_a1b2.
+// handleTreeCallback handles callback queries originating from in-message <tg-button> elements.
+func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.CallbackQuery) {
+	data := cq.Data
+	chatID := int64(0)
+	msgID := 0
+	if cq.Message.Message != nil {
+		chatID = cq.Message.Message.Chat.ID
+		msgID = cq.Message.Message.ID
+	}
+	if chatID == 0 || msgID == 0 {
+		return
+	}
+
+	switch {
+	case data == cbTreeClose:
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Explorer closed",
+			})
+			return err
+		})
+		a.closeTreeExplorer(ctx, b, chatID, cq.From.ID)
+
+	case data == cbTreeHome:
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return err
+		})
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, a.TreeState.Home())
+
+	case strings.HasPrefix(data, cbTreeCD):
+		tok := strings.TrimPrefix(data, cbTreeCD)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Directory expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+		if _, err := os.ReadDir(targetPath); err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access directory: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return err
+		})
+		a.TreeState.SetUserPath(cq.From.ID, targetPath)
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, targetPath)
+
+	case strings.HasPrefix(data, cbTreeUp):
+		tok := strings.TrimPrefix(data, cbTreeUp)
+		cur := a.TreeState.GetPath(tok)
+		if cur == "" {
+			cur = a.TreeState.GetUserPath(cq.From.ID)
+		}
+		parent := filepath.Dir(cur)
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return err
+		})
+		a.TreeState.SetUserPath(cq.From.ID, parent)
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, parent)
+
+	case strings.HasPrefix(data, cbTreeRef):
+		tok := strings.TrimPrefix(data, cbTreeRef)
+		cur := a.TreeState.GetPath(tok)
+		if cur == "" {
+			cur = a.TreeState.GetUserPath(cq.From.ID)
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Refreshed",
+			})
+			return err
+		})
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, cur)
+	}
+}
+
+// handleTreeCommand allows optional text fallback commands like /cd_home or /cd_close.
 func (a *App) handleTreeCommand(ctx context.Context, b *bot.Bot, msg *models.Message) {
 	chatID := msg.Chat.ID
 	userID := msg.From.ID
 	text := strings.TrimSpace(msg.Text)
 
-	// Clean up the user's command message so the chat isn't cluttered
 	_ = a.telegramCall(ctx, chatID, func() error {
 		_, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
 			ChatID:    chatID,
@@ -211,80 +316,54 @@ func (a *App) handleTreeCommand(ctx context.Context, b *bot.Bot, msg *models.Mes
 	case text == "/cd_close":
 		a.closeTreeExplorer(ctx, b, chatID, userID)
 	case text == "/cd_home":
-		a.navigateTree(ctx, b, chatID, userID, a.TreeState.Home())
+		a.TreeState.SetUserPath(userID, a.TreeState.Home())
+		treeMsgID := a.TreeState.GetUserMessageID(userID)
+		_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, a.TreeState.Home())
 	case text == "/cd_up":
 		cur := a.TreeState.GetUserPath(userID)
 		parent := filepath.Dir(cur)
-		a.navigateTree(ctx, b, chatID, userID, parent)
+		a.TreeState.SetUserPath(userID, parent)
+		treeMsgID := a.TreeState.GetUserMessageID(userID)
+		_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, parent)
 	case text == "/cd_ref":
 		cur := a.TreeState.GetUserPath(userID)
-		a.navigateTree(ctx, b, chatID, userID, cur)
+		treeMsgID := a.TreeState.GetUserMessageID(userID)
+		_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, cur)
 	case strings.HasPrefix(text, "/cd_"):
 		tok := strings.TrimPrefix(text, "/cd_")
 		targetPath := a.TreeState.GetPath(tok)
 		if targetPath == "" {
-			a.showStatus(ctx, b, chatID, userID, "Unknown or expired directory command: "+text)
+			a.showStatus(ctx, b, chatID, userID, "Unknown or expired directory command.")
 			return
 		}
-		a.navigateTree(ctx, b, chatID, userID, targetPath)
+		a.TreeState.SetUserPath(userID, targetPath)
+		treeMsgID := a.TreeState.GetUserMessageID(userID)
+		_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, targetPath)
 	}
 }
 
-// navigateTree updates the tree message to targetPath in-place.
-func (a *App) navigateTree(ctx context.Context, b *bot.Bot, chatID, userID int64, targetPath string) {
-	absPath, err := filepath.Abs(targetPath)
+// editTreeMessage updates the tree rich message in-place using rich_message.
+func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, messageID int, dirPath string) error {
+	richHTML, err := a.buildTreeRichMessageHTML(dirPath)
 	if err != nil {
-		a.showStatus(ctx, b, chatID, userID, "Invalid path: "+err.Error())
-		return
+		return err
 	}
-
-	if _, err := os.ReadDir(absPath); err != nil {
-		a.showStatus(ctx, b, chatID, userID, "Cannot access "+absPath+": "+err.Error())
-		return
-	}
-
-	a.TreeState.SetUserPath(userID, absPath)
-	htmlText, err := a.buildTreeRichText(absPath)
-	if err != nil {
-		a.showStatus(ctx, b, chatID, userID, "Cannot read directory: "+err.Error())
-		return
-	}
-
-	treeMsgID := a.TreeState.GetUserMessageID(userID)
-	if treeMsgID != 0 {
-		var editErr error
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, editErr = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    chatID,
-				MessageID: treeMsgID,
-				Text:      htmlText,
-				ParseMode: models.ParseModeHTML,
-			})
-			if editErr != nil && strings.Contains(editErr.Error(), "message is not modified") {
-				return nil
-			}
-			return editErr
-		})
-		if editErr == nil || (editErr != nil && strings.Contains(editErr.Error(), "message is not modified")) {
-			return
-		}
-	}
-
-	// Fallback to sending a new message if edit fails (e.g. previous message was deleted)
-	_ = a.telegramCall(ctx, chatID, func() error {
-		msg, sendErr := b.SendMessage(ctx, &bot.SendMessageParams{
+	return a.telegramCall(ctx, chatID, func() error {
+		_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
-			Text:      htmlText,
-			ParseMode: models.ParseModeHTML,
+			MessageID: messageID,
+			RichMessage: &models.InputRichMessage{
+				HTML: richHTML,
+			},
 		})
-		if sendErr == nil && msg != nil {
-			a.TreeState.SetUserMessage(userID, msg.ID)
+		if editErr != nil && strings.Contains(editErr.Error(), "message is not modified") {
+			return nil
 		}
-		return sendErr
+		return editErr
 	})
 }
 
-// closeTreeExplorer marks the tree message as closed.
+// closeTreeExplorer updates the message to closed.
 func (a *App) closeTreeExplorer(ctx context.Context, b *bot.Bot, chatID, userID int64) {
 	treeMsgID := a.TreeState.GetUserMessageID(userID)
 	if treeMsgID != 0 {
@@ -293,8 +372,9 @@ func (a *App) closeTreeExplorer(ctx context.Context, b *bot.Bot, chatID, userID 
 			_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 				ChatID:    chatID,
 				MessageID: treeMsgID,
-				Text:      fmt.Sprintf("🌳 <b>Folder Explorer</b> (closed)\n<i>Last path:</i> <code>%s</code>", html.EscapeString(cur)),
-				ParseMode: models.ParseModeHTML,
+				RichMessage: &models.InputRichMessage{
+					HTML: fmt.Sprintf("<p>🌳 <b>Folder Explorer</b> (closed)<br/><i>Last path:</i> <code>%s</code></p>", html.EscapeString(cur)),
+				},
 			})
 			return err
 		})
@@ -302,8 +382,8 @@ func (a *App) closeTreeExplorer(ctx context.Context, b *bot.Bot, chatID, userID 
 	}
 }
 
-// buildTreeRichText formats the directory tree using rich text with /cd_<token> command buttons.
-func (a *App) buildTreeRichText(dirPath string) (string, error) {
+// buildTreeRichMessageHTML formats the tree with in-message <tg-button> and <tg-button-row> rich text tags.
+func (a *App) buildTreeRichMessageHTML(dirPath string) (string, error) {
 	cleanPath := filepath.Clean(dirPath)
 	entries, err := os.ReadDir(cleanPath)
 	if err != nil {
@@ -330,22 +410,22 @@ func (a *App) buildTreeRichText(dirPath string) (string, error) {
 	sortEntries(files)
 
 	var sb strings.Builder
-	sb.WriteString("🌳 <b>Folder Explorer</b>\n")
-	sb.WriteString("📂 <code>" + html.EscapeString(cleanPath) + "</code>\n\n")
+	sb.WriteString("<p>🌳 <b>Folder Explorer</b><br/>\n")
+	sb.WriteString("📂 <code>" + html.EscapeString(cleanPath) + "</code></p>\n")
 
 	lineCount := 0
 
-	if len(dirs) > 0 {
-		sb.WriteString("📁 <b>Directories:</b>\n")
+	if len(dirs) > 0 || len(files) > 0 {
+		sb.WriteString("<p>")
 		for _, d := range dirs {
 			if lineCount >= treeMaxLines {
-				sb.WriteString(fmt.Sprintf("  <i>... and %d more directories</i>\n", len(dirs)-lineCount))
+				sb.WriteString(fmt.Sprintf("<i>... and %d more directories</i><br/>\n", len(dirs)-lineCount))
 				break
 			}
 
 			subDirPath := filepath.Join(cleanPath, d.Name())
 			tok := a.TreeState.GetToken(subDirPath)
-			sb.WriteString(fmt.Sprintf("• 📁 <b>%s</b> — /cd_%s\n", html.EscapeString(d.Name()), tok))
+			sb.WriteString(fmt.Sprintf("├── 📁 <b>%s</b> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:cd:%s\">Open</tg-button><br/>\n", html.EscapeString(d.Name()), tok))
 			lineCount++
 
 			// Peek sub-items for visual hierarchy
@@ -364,54 +444,52 @@ func (a *App) buildTreeRichText(dirPath string) (string, error) {
 				for j := 0; j < limit && lineCount < treeMaxLines; j++ {
 					subSubPath := filepath.Join(subDirPath, subDirs[j].Name())
 					subTok := a.TreeState.GetToken(subSubPath)
-					subPrefix := "  ├─ "
+					subPrefix := "│   ├─ "
 					if j == limit-1 && len(subDirs) <= limit {
-						subPrefix = "  └─ "
+						subPrefix = "│   └─ "
 					}
-					sb.WriteString(fmt.Sprintf("%s📁 %s — /cd_%s\n", subPrefix, html.EscapeString(subDirs[j].Name()), subTok))
+					sb.WriteString(fmt.Sprintf("%s📁 %s <tg-button type=\"callback_data\" style=\"link\" data=\"t:cd:%s\">Open</tg-button><br/>\n", subPrefix, html.EscapeString(subDirs[j].Name()), subTok))
 					lineCount++
 				}
 				if len(subDirs) > limit && lineCount < treeMaxLines {
-					sb.WriteString(fmt.Sprintf("  └─ <i>... +%d more</i>\n", len(subDirs)-limit))
+					sb.WriteString(fmt.Sprintf("│   └─ <i>... +%d more</i><br/>\n", len(subDirs)-limit))
 					lineCount++
 				}
 			}
 		}
-		sb.WriteString("\n")
-	}
 
-	if len(files) > 0 {
-		sb.WriteString("📄 <b>Files:</b>\n")
 		fileLimit := 10
 		if len(files) < fileLimit {
 			fileLimit = len(files)
 		}
 		for i := 0; i < fileLimit && lineCount < treeMaxLines; i++ {
-			sb.WriteString(fmt.Sprintf("• 📄 %s\n", html.EscapeString(files[i].Name())))
+			prefix := "├── "
+			if i == len(files)-1 && len(files) <= fileLimit {
+				prefix = "└── "
+			}
+			sb.WriteString(fmt.Sprintf("%s📄 %s<br/>\n", prefix, html.EscapeString(files[i].Name())))
 			lineCount++
 		}
 		if len(files) > fileLimit {
-			sb.WriteString(fmt.Sprintf("• <i>... and %d more files</i>\n", len(files)-fileLimit))
+			sb.WriteString(fmt.Sprintf("└── <i>... and %d more files</i><br/>\n", len(files)-fileLimit))
 		}
-		sb.WriteString("\n")
+		sb.WriteString("</p>\n")
+	} else {
+		sb.WriteString("<p><i>(empty directory)</i></p>\n")
 	}
 
-	if len(dirs) == 0 && len(files) == 0 {
-		sb.WriteString("<i>(empty directory)</i>\n\n")
-	}
+	sb.WriteString(fmt.Sprintf("<p>📊 <i>%d directories, %d files</i></p>\n", len(dirs), len(files)))
 
-	sb.WriteString(fmt.Sprintf("📊 <i>%d directories, %d files</i>\n\n", len(dirs), len(files)))
-
-	// Rich text command navigation bar
-	sb.WriteString("<b>Navigation:</b>\n")
-	var navItems []string
+	// Rich text in-message button row
+	curToken := a.TreeState.GetToken(cleanPath)
+	sb.WriteString("<tg-button-row align=\"left\">\n")
 	if cleanPath != "/" {
-		navItems = append(navItems, "⬆️ <b>Up:</b> /cd_up")
+		sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:up:%s\">⬆️ Up</tg-button>\n", curToken))
 	}
-	navItems = append(navItems, "🏠 <b>Home:</b> /cd_home")
-	navItems = append(navItems, "🔄 <b>Refresh:</b> /cd_ref")
-	navItems = append(navItems, "❌ <b>Close:</b> /cd_close")
-	sb.WriteString(strings.Join(navItems, "  •  "))
+	sb.WriteString("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:home\">🏠 Home</tg-button>\n")
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ref:%s\">🔄 Refresh</tg-button>\n", curToken))
+	sb.WriteString("  <tg-button type=\"callback_data\" style=\"danger\" data=\"t:close\">❌ Close</tg-button>\n")
+	sb.WriteString("</tg-button-row>")
 
 	return sb.String(), nil
 }
