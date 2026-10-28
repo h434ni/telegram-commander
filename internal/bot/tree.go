@@ -444,8 +444,13 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		tok := a.TreeState.GetToken(subPath)
 		isOpen := a.TreeState.IsExpanded(userID, subPath)
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
-			prefix, branch, html.EscapeString(subPath), tok, html.EscapeString(d.Name())))
+		style := "primary"
+		if isOpen {
+			style = "success"
+		}
+
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" style=\"%s\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
+			prefix, branch, html.EscapeString(subPath), style, tok, html.EscapeString(d.Name())))
 		(*lineCount)++
 
 		if isOpen {
