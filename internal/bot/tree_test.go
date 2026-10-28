@@ -87,7 +87,9 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Folder names are blue (primary) buttons with copy button in front, no folder emojis
 	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subAlpha+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokAlpha+`">alpha</tg-button>`)
 	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
-	require.Contains(t, html1, "📄 file1.txt")
+	file1Path := filepath.Join(tempDir, "file1.txt")
+	tokFile1 := app.TreeState.GetToken(file1Path)
+	require.Contains(t, html1, `<tg-button type="copy_text" text="`+file1Path+`"> </tg-button> <tg-button type="callback_data" style="success" data="t:file:`+tokFile1+`">file1.txt</tg-button>`)
 	require.NotContains(t, html1, "🏠 Home")
 	require.Contains(t, html1, "🔄 Refresh")
 	require.Contains(t, html1, "❌ Close")

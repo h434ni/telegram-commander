@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"html"
@@ -19,11 +20,13 @@ import (
 const (
 	cbTreePrefix = "t:"
 	cbTreeTog    = "t:tog:"
+	cbTreeFile   = "t:file:"
 	cbTreeHome   = "t:home"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
 
-	treeMaxLines = 35 // max lines rendered in tree
+	maxFileSendSize = 20 * 1024 * 1024 // 20 MB max file size for telegram upload
+	treeMaxLines    = 35               // max lines rendered in tree
 )
 
 // TreeStateManager maps directory paths to tokens and tracks expanded state per user.
@@ -322,6 +325,108 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return err
 		})
 		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
+
+	case strings.HasPrefix(data, cbTreeFile):
+		tok := strings.TrimPrefix(data, cbTreeFile)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "File reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access file: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if fi.IsDir() {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is a directory.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if fi.Size() == 0 {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot send empty file (0 bytes).",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if fi.Size() > maxFileSendSize {
+			sizeMB := float64(fi.Size()) / (1024 * 1024)
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            fmt.Sprintf("File is too large (%.1f MB > 20 MB).", sizeMB),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		fileData, err := os.ReadFile(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot read file: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Sending " + filepath.Base(targetPath) + "...",
+			})
+			return aErr
+		})
+
+		params := &bot.SendDocumentParams{
+			ChatID: chatID,
+		}
+		sendErr := a.telegramCall(ctx, chatID, func() error {
+			params.Document = &models.InputFileUpload{
+				Filename: filepath.Base(targetPath),
+				Data:     bytes.NewReader(fileData),
+			}
+			_, sErr := b.SendDocument(ctx, params)
+			return sErr
+		})
+		if sendErr != nil {
+			a.Log.Error("failed to send tree file document", "path", targetPath, "err", sendErr)
+			a.showStatus(ctx, b, chatID, cq.From.ID, "Failed to send file: "+sendErr.Error())
+		}
 	}
 }
 
@@ -469,7 +574,11 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			branch = "└── "
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s📄 %s<br/>\n", prefix, branch, html.EscapeString(f.Name())))
+		filePath := filepath.Join(dirPath, f.Name())
+		tok := a.TreeState.GetToken(filePath)
+
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" style=\"success\" data=\"t:file:%s\">%s</tg-button><br/>\n",
+			prefix, branch, html.EscapeString(filePath), tok, html.EscapeString(f.Name())))
 		(*lineCount)++
 	}
 }

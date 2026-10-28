@@ -24,11 +24,12 @@ import (
 )
 
 type apiServer struct {
-	mu         sync.Mutex
-	messages   []map[string]any
-	documents  []map[string]any
-	deletes    int
-	deletedIDs []string
+	mu              sync.Mutex
+	messages        []map[string]any
+	documents       []map[string]any
+	callbackAnswers []map[string]any
+	deletes         int
+	deletedIDs      []string
 
 	// Optional failure injection for delivery-retry tests.
 	// failSendN: first N sendMessage/sendDocument calls return an error.
@@ -100,6 +101,11 @@ func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"text":       m["text"],
 		})
 	case strings.HasSuffix(path, "/answerCallbackQuery"):
+		s.callbackAnswers = append(s.callbackAnswers, map[string]any{
+			"id":         r.FormValue("callback_query_id"),
+			"text":       r.FormValue("text"),
+			"show_alert": r.FormValue("show_alert"),
+		})
 		writeOK(w, true)
 	case strings.HasSuffix(path, "/editMessageText"):
 		text := r.FormValue("text")
@@ -1439,10 +1445,49 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
 
+	innerPath := filepath.Join(subDir, "inner.txt")
+	tokInner := app.TreeState.GetToken(innerPath)
+
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s"> </tg-button> <tg-button type="callback_data" style="success" data="t:file:%s">inner.txt</tg-button>`, innerPath, tokInner))
 	require.Contains(t, joined, ">subfolder</tg-button>")
 	require.NotContains(t, joined, "🏠 Home")
+
+	// 2b. Click green file button to send file as document
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokInner))
+
+	srv.mu.Lock()
+	require.NotEmpty(t, srv.documents)
+	lastDoc := srv.documents[len(srv.documents)-1]
+	srv.mu.Unlock()
+	require.Equal(t, "inner.txt", lastDoc["filename"])
+	require.Equal(t, len("inner"), lastDoc["size"])
+
+	// 2c. Test empty file (0 bytes) alert
+	emptyPath := filepath.Join(subDir, "empty.txt")
+	require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o644))
+	tokEmpty := app.TreeState.GetToken(emptyPath)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokEmpty))
+
+	srv.mu.Lock()
+	lastAns := srv.callbackAnswers[len(srv.callbackAnswers)-1]
+	srv.mu.Unlock()
+	require.Contains(t, lastAns["text"], "empty")
+
+	// 2d. Test large file (> 20 MB) alert
+	largePath := filepath.Join(subDir, "large.bin")
+	fLarge, err := os.Create(largePath)
+	require.NoError(t, err)
+	require.NoError(t, fLarge.Truncate(25*1024*1024))
+	_ = fLarge.Close()
+	tokLarge := app.TreeState.GetToken(largePath)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokLarge))
+
+	srv.mu.Lock()
+	lastAns = srv.callbackAnswers[len(srv.callbackAnswers)-1]
+	srv.mu.Unlock()
+	require.Contains(t, lastAns["text"], "too large")
 
 	// 3. Click the same folder button again to close it
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSub))
