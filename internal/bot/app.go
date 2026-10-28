@@ -676,7 +676,6 @@ func (a *App) clearConfirm(userID int64) {
 
 func (a *App) executeButton(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node, input string) {
 	if a.isTreeButton(node) {
-		a.deleteNavMessage(ctx, b, chatID, user.ID)
 		a.startTreeExplorer(ctx, b, chatID, user, node)
 		return
 	}

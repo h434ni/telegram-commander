@@ -1426,7 +1426,10 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	srv.mu.Lock()
 	msgs := visibleTexts(srv)
+	srvDeletes := srv.deletes
 	srv.mu.Unlock()
+
+	require.Equal(t, 0, srvDeletes, "nav message should not be deleted so keyboard remains")
 
 	joined := strings.Join(msgs, "\n")
 	require.Contains(t, joined, "Folder Explorer")
