@@ -4,40 +4,32 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
 const (
-	cbTreePrefix = "t:"
-	cbTreeCD     = "t:cd:"
-	cbTreeUp     = "t:up:"
-	cbTreePage   = "t:p:"
-	cbTreeHome   = "t:home"
-	cbTreeRef    = "t:ref:"
-	cbTreeClose  = "t:close"
-	cbTreeNoop   = "t:noop"
-
-	treePageSize = 8  // 4 rows of 2 buttons
-	treeMaxLines = 25 // max lines inside <pre>
+	treeMaxLines = 30 // max lines of directory entries
 )
 
-// TreeStateManager maps directory paths to short tokens so callback_data
-// stays well below Telegram's 64-byte limit.
+// TreeStateManager maps directory paths to short random hex tokens so commands
+// like /cd_a1b2 can be tapped in rich text directly inside the message.
 type TreeStateManager struct {
-	mu       sync.RWMutex
-	counter  uint64
-	paths    map[string]string // token -> path
-	tokens   map[string]string // path -> token
-	homePath string
+	mu           sync.RWMutex
+	rnd          *rand.Rand
+	paths        map[string]string // token -> path
+	tokens       map[string]string // path -> token
+	userPaths    map[int64]string  // userID -> current path
+	userMessages map[int64]int     // userID -> message ID of active tree
+	homePath     string
 }
 
 // NewTreeStateManager creates a new state manager with a default home path.
@@ -52,9 +44,12 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		home = abs
 	}
 	return &TreeStateManager{
-		paths:    make(map[string]string),
-		tokens:   make(map[string]string),
-		homePath: filepath.Clean(home),
+		rnd:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		paths:        make(map[string]string),
+		tokens:       make(map[string]string),
+		userPaths:    make(map[int64]string),
+		userMessages: make(map[int64]int),
+		homePath:     filepath.Clean(home),
 	}
 }
 
@@ -63,7 +58,7 @@ func (m *TreeStateManager) Home() string {
 	return m.homePath
 }
 
-// GetToken returns an existing or newly allocated token for path.
+// GetToken returns an existing or newly allocated random token for path.
 func (m *TreeStateManager) GetToken(path string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,8 +68,15 @@ func (m *TreeStateManager) GetToken(path string) string {
 		return tok
 	}
 
-	m.counter++
-	tok := strconv.FormatUint(m.counter, 16)
+	// Generate a unique 4-character random hex token
+	var tok string
+	for {
+		tok = fmt.Sprintf("%04x", m.rnd.Intn(0x10000))
+		if _, exists := m.paths[tok]; !exists {
+			break
+		}
+	}
+
 	m.paths[tok] = clean
 	m.tokens[clean] = tok
 
@@ -82,8 +84,7 @@ func (m *TreeStateManager) GetToken(path string) string {
 	if len(m.paths) > 2000 {
 		m.paths = make(map[string]string)
 		m.tokens = make(map[string]string)
-		m.counter = 1
-		tok = "1"
+		tok = fmt.Sprintf("%04x", m.rnd.Intn(0x10000))
 		m.paths[tok] = clean
 		m.tokens[clean] = tok
 	}
@@ -96,6 +97,44 @@ func (m *TreeStateManager) GetPath(token string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.paths[token]
+}
+
+// SetUserPath records the directory the user is currently browsing.
+func (m *TreeStateManager) SetUserPath(userID int64, path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.userPaths[userID] = filepath.Clean(path)
+}
+
+// GetUserPath returns the directory the user is currently browsing, or Home.
+func (m *TreeStateManager) GetUserPath(userID int64) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if p, ok := m.userPaths[userID]; ok && p != "" {
+		return p
+	}
+	return m.homePath
+}
+
+// SetUserMessage records the message ID of the active tree message.
+func (m *TreeStateManager) SetUserMessage(userID int64, msgID int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.userMessages[userID] = msgID
+}
+
+// GetUserMessageID returns the last tree message ID for this user.
+func (m *TreeStateManager) GetUserMessageID(userID int64) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.userMessages[userID]
+}
+
+// ClearUserMessage resets the tracked tree message for the user.
+func (m *TreeStateManager) ClearUserMessage(userID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.userMessages, userID)
 }
 
 // isTreeButton returns true if the node targets the tree feature.
@@ -133,184 +172,142 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 		return
 	}
 
-	text, markup, err := a.buildTreeMessage(absPath, 0)
+	a.TreeState.SetUserPath(user.ID, absPath)
+	htmlText, err := a.buildTreeRichText(absPath)
 	if err != nil {
 		a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
 		return
 	}
 
 	_ = a.telegramCall(ctx, chatID, func() error {
-		_, sendErr := b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:      chatID,
-			Text:        text,
-			ParseMode:   models.ParseModeHTML,
-			ReplyMarkup: markup,
+		msg, sendErr := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    chatID,
+			Text:      htmlText,
+			ParseMode: models.ParseModeHTML,
 		})
+		if sendErr == nil && msg != nil {
+			a.TreeState.SetUserMessage(user.ID, msg.ID)
+		}
 		return sendErr
 	})
 }
 
-// handleTreeCallback processes callback queries originating from tree buttons.
-func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.CallbackQuery) {
-	data := cq.Data
-	chatID := int64(0)
-	msgID := 0
-	if cq.Message.Message != nil {
-		chatID = cq.Message.Message.Chat.ID
-		msgID = cq.Message.Message.ID
+// handleTreeCommand routes in-message rich text slash commands like /cd_a1b2.
+func (a *App) handleTreeCommand(ctx context.Context, b *bot.Bot, msg *models.Message) {
+	chatID := msg.Chat.ID
+	userID := msg.From.ID
+	text := strings.TrimSpace(msg.Text)
+
+	// Clean up the user's command message so the chat isn't cluttered
+	_ = a.telegramCall(ctx, chatID, func() error {
+		_, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+			ChatID:    chatID,
+			MessageID: msg.ID,
+		})
+		return err
+	})
+
+	switch {
+	case text == "/cd_close":
+		a.closeTreeExplorer(ctx, b, chatID, userID)
+	case text == "/cd_home":
+		a.navigateTree(ctx, b, chatID, userID, a.TreeState.Home())
+	case text == "/cd_up":
+		cur := a.TreeState.GetUserPath(userID)
+		parent := filepath.Dir(cur)
+		a.navigateTree(ctx, b, chatID, userID, parent)
+	case text == "/cd_ref":
+		cur := a.TreeState.GetUserPath(userID)
+		a.navigateTree(ctx, b, chatID, userID, cur)
+	case strings.HasPrefix(text, "/cd_"):
+		tok := strings.TrimPrefix(text, "/cd_")
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			a.showStatus(ctx, b, chatID, userID, "Unknown or expired directory command: "+text)
+			return
+		}
+		a.navigateTree(ctx, b, chatID, userID, targetPath)
 	}
-	if chatID == 0 || msgID == 0 {
+}
+
+// navigateTree updates the tree message to targetPath in-place.
+func (a *App) navigateTree(ctx context.Context, b *bot.Bot, chatID, userID int64, targetPath string) {
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		a.showStatus(ctx, b, chatID, userID, "Invalid path: "+err.Error())
 		return
 	}
 
-	switch {
-	case data == cbTreeClose:
+	if _, err := os.ReadDir(absPath); err != nil {
+		a.showStatus(ctx, b, chatID, userID, "Cannot access "+absPath+": "+err.Error())
+		return
+	}
+
+	a.TreeState.SetUserPath(userID, absPath)
+	htmlText, err := a.buildTreeRichText(absPath)
+	if err != nil {
+		a.showStatus(ctx, b, chatID, userID, "Cannot read directory: "+err.Error())
+		return
+	}
+
+	treeMsgID := a.TreeState.GetUserMessageID(userID)
+	if treeMsgID != 0 {
+		var editErr error
 		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-				Text:            "Explorer closed",
+			_, editErr = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+				ChatID:    chatID,
+				MessageID: treeMsgID,
+				Text:      htmlText,
+				ParseMode: models.ParseModeHTML,
 			})
-			return err
+			if editErr != nil && strings.Contains(editErr.Error(), "message is not modified") {
+				return nil
+			}
+			return editErr
 		})
+		if editErr == nil || (editErr != nil && strings.Contains(editErr.Error(), "message is not modified")) {
+			return
+		}
+	}
+
+	// Fallback to sending a new message if edit fails (e.g. previous message was deleted)
+	_ = a.telegramCall(ctx, chatID, func() error {
+		msg, sendErr := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    chatID,
+			Text:      htmlText,
+			ParseMode: models.ParseModeHTML,
+		})
+		if sendErr == nil && msg != nil {
+			a.TreeState.SetUserMessage(userID, msg.ID)
+		}
+		return sendErr
+	})
+}
+
+// closeTreeExplorer marks the tree message as closed.
+func (a *App) closeTreeExplorer(ctx context.Context, b *bot.Bot, chatID, userID int64) {
+	treeMsgID := a.TreeState.GetUserMessageID(userID)
+	if treeMsgID != 0 {
+		cur := a.TreeState.GetUserPath(userID)
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 				ChatID:    chatID,
-				MessageID: msgID,
-				Text:      "🌳 <b>Folder Explorer</b> (closed)",
+				MessageID: treeMsgID,
+				Text:      fmt.Sprintf("🌳 <b>Folder Explorer</b> (closed)\n<i>Last path:</i> <code>%s</code>", html.EscapeString(cur)),
 				ParseMode: models.ParseModeHTML,
 			})
 			return err
 		})
-
-	case data == cbTreeNoop:
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-			})
-			return err
-		})
-
-	case data == cbTreeHome:
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-			})
-			return err
-		})
-		_ = a.editTreeMessage(ctx, b, chatID, msgID, a.TreeState.Home(), 0)
-
-	case strings.HasPrefix(data, cbTreeCD):
-		tok := strings.TrimPrefix(data, cbTreeCD)
-		targetPath := a.TreeState.GetPath(tok)
-		if targetPath == "" {
-			_ = a.telegramCall(ctx, chatID, func() error {
-				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-					CallbackQueryID: cq.ID,
-					Text:            "Directory expired. Reopen tg-tree.",
-					ShowAlert:       true,
-				})
-				return err
-			})
-			return
-		}
-		if _, err := os.ReadDir(targetPath); err != nil {
-			_ = a.telegramCall(ctx, chatID, func() error {
-				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-					CallbackQueryID: cq.ID,
-					Text:            "Cannot access directory: " + err.Error(),
-					ShowAlert:       true,
-				})
-				return aErr
-			})
-			return
-		}
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-			})
-			return err
-		})
-		_ = a.editTreeMessage(ctx, b, chatID, msgID, targetPath, 0)
-
-	case strings.HasPrefix(data, cbTreeUp):
-		tok := strings.TrimPrefix(data, cbTreeUp)
-		cur := a.TreeState.GetPath(tok)
-		if cur == "" {
-			cur = a.TreeState.Home()
-		}
-		parent := filepath.Dir(cur)
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-			})
-			return err
-		})
-		_ = a.editTreeMessage(ctx, b, chatID, msgID, parent, 0)
-
-	case strings.HasPrefix(data, cbTreeRef):
-		tok := strings.TrimPrefix(data, cbTreeRef)
-		cur := a.TreeState.GetPath(tok)
-		if cur == "" {
-			cur = a.TreeState.Home()
-		}
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-				Text:            "Refreshed",
-			})
-			return err
-		})
-		_ = a.editTreeMessage(ctx, b, chatID, msgID, cur, 0)
-
-	case strings.HasPrefix(data, cbTreePage):
-		rest := strings.TrimPrefix(data, cbTreePage)
-		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) != 2 {
-			return
-		}
-		p, _ := strconv.Atoi(parts[0])
-		tok := parts[1]
-		cur := a.TreeState.GetPath(tok)
-		if cur == "" {
-			cur = a.TreeState.Home()
-		}
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-				CallbackQueryID: cq.ID,
-			})
-			return err
-		})
-		_ = a.editTreeMessage(ctx, b, chatID, msgID, cur, p)
+		a.TreeState.ClearUserMessage(userID)
 	}
 }
 
-// editTreeMessage generates and updates the message text and inline keyboard.
-func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, messageID int, dirPath string, page int) error {
-	text, markup, err := a.buildTreeMessage(dirPath, page)
-	if err != nil {
-		return err
-	}
-	return a.telegramCall(ctx, chatID, func() error {
-		_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-			ChatID:      chatID,
-			MessageID:   messageID,
-			Text:        text,
-			ParseMode:   models.ParseModeHTML,
-			ReplyMarkup: markup,
-		})
-		if editErr != nil && strings.Contains(editErr.Error(), "message is not modified") {
-			return nil
-		}
-		return editErr
-	})
-}
-
-// buildTreeMessage scans dirPath and produces the HTML text and inline keyboard.
-func (a *App) buildTreeMessage(dirPath string, page int) (string, *models.InlineKeyboardMarkup, error) {
+// buildTreeRichText formats the directory tree using rich text with /cd_<token> command buttons.
+func (a *App) buildTreeRichText(dirPath string) (string, error) {
 	cleanPath := filepath.Clean(dirPath)
 	entries, err := os.ReadDir(cleanPath)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 
 	var dirs []os.DirEntry
@@ -319,7 +316,6 @@ func (a *App) buildTreeMessage(dirPath string, page int) (string, *models.Inline
 		if e.IsDir() {
 			dirs = append(dirs, e)
 		} else {
-			// Check if symlink to directory
 			if e.Type()&os.ModeSymlink != 0 {
 				if fi, sErr := os.Stat(filepath.Join(cleanPath, e.Name())); sErr == nil && fi.IsDir() {
 					dirs = append(dirs, e)
@@ -333,169 +329,91 @@ func (a *App) buildTreeMessage(dirPath string, page int) (string, *models.Inline
 	sortEntries(dirs)
 	sortEntries(files)
 
-	// Build tree text preview
-	var treeLines []string
-	treeLines = append(treeLines, filepath.Base(cleanPath)+"/")
-
-	allEntries := append([]os.DirEntry{}, dirs...)
-	allEntries = append(allEntries, files...)
+	var sb strings.Builder
+	sb.WriteString("🌳 <b>Folder Explorer</b>\n")
+	sb.WriteString("📂 <code>" + html.EscapeString(cleanPath) + "</code>\n\n")
 
 	lineCount := 0
-	for i, entry := range allEntries {
-		if lineCount >= treeMaxLines {
-			treeLines = append(treeLines, fmt.Sprintf("... (%d more items)", len(allEntries)-i))
-			break
-		}
 
-		isLast := i == len(allEntries)-1
-		prefix := "├── "
-		if isLast {
-			prefix = "└── "
-		}
+	if len(dirs) > 0 {
+		sb.WriteString("📁 <b>Directories:</b>\n")
+		for _, d := range dirs {
+			if lineCount >= treeMaxLines {
+				sb.WriteString(fmt.Sprintf("  <i>... and %d more directories</i>\n", len(dirs)-lineCount))
+				break
+			}
 
-		if entry.IsDir() {
-			treeLines = append(treeLines, prefix+"📁 "+entry.Name())
+			subDirPath := filepath.Join(cleanPath, d.Name())
+			tok := a.TreeState.GetToken(subDirPath)
+			sb.WriteString(fmt.Sprintf("• 📁 <b>%s</b> — /cd_%s\n", html.EscapeString(d.Name()), tok))
 			lineCount++
 
-			// Peek sub-items for 1 level deeper
-			subPath := filepath.Join(cleanPath, entry.Name())
-			if subEntries, sErr := os.ReadDir(subPath); sErr == nil && len(subEntries) > 0 {
-				subDirs := []os.DirEntry{}
+			// Peek sub-items for visual hierarchy
+			if subEntries, sErr := os.ReadDir(subDirPath); sErr == nil && len(subEntries) > 0 {
+				var subDirs []os.DirEntry
 				for _, se := range subEntries {
 					if se.IsDir() {
 						subDirs = append(subDirs, se)
 					}
 				}
 				sortEntries(subDirs)
-				subPrefix := "│   "
-				if isLast {
-					subPrefix = "    "
-				}
 				limit := 3
 				if len(subDirs) < limit {
 					limit = len(subDirs)
 				}
 				for j := 0; j < limit && lineCount < treeMaxLines; j++ {
-					subIsLast := j == len(subDirs)-1 && len(subDirs) <= 3
-					subItemPrefix := "├── "
-					if subIsLast {
-						subItemPrefix = "└── "
+					subSubPath := filepath.Join(subDirPath, subDirs[j].Name())
+					subTok := a.TreeState.GetToken(subSubPath)
+					subPrefix := "  ├─ "
+					if j == limit-1 && len(subDirs) <= limit {
+						subPrefix = "  └─ "
 					}
-					treeLines = append(treeLines, subPrefix+subItemPrefix+"📁 "+subDirs[j].Name())
+					sb.WriteString(fmt.Sprintf("%s📁 %s — /cd_%s\n", subPrefix, html.EscapeString(subDirs[j].Name()), subTok))
 					lineCount++
 				}
 				if len(subDirs) > limit && lineCount < treeMaxLines {
-					treeLines = append(treeLines, subPrefix+"└── ... ("+strconv.Itoa(len(subDirs)-limit)+" more)")
+					sb.WriteString(fmt.Sprintf("  └─ <i>... +%d more</i>\n", len(subDirs)-limit))
 					lineCount++
 				}
 			}
-		} else {
-			treeLines = append(treeLines, prefix+"📄 "+entry.Name())
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(files) > 0 {
+		sb.WriteString("📄 <b>Files:</b>\n")
+		fileLimit := 10
+		if len(files) < fileLimit {
+			fileLimit = len(files)
+		}
+		for i := 0; i < fileLimit && lineCount < treeMaxLines; i++ {
+			sb.WriteString(fmt.Sprintf("• 📄 %s\n", html.EscapeString(files[i].Name())))
 			lineCount++
 		}
-	}
-
-	if len(allEntries) == 0 {
-		treeLines = append(treeLines, "  (empty directory)")
-	}
-
-	treeContent := strings.Join(treeLines, "\n")
-
-	var sb strings.Builder
-	sb.WriteString("🌳 <b>Folder Explorer</b>\n")
-	sb.WriteString("📂 <code>" + html.EscapeString(cleanPath) + "</code>\n\n")
-	sb.WriteString("<pre>" + html.EscapeString(treeContent) + "</pre>\n")
-	sb.WriteString(fmt.Sprintf("📊 <i>%d directories, %d files</i>", len(dirs), len(files)))
-
-	curToken := a.TreeState.GetToken(cleanPath)
-
-	// Build inline buttons for subdirectories
-	totalPages := (len(dirs) + treePageSize - 1) / treePageSize
-	if totalPages == 0 {
-		totalPages = 1
-	}
-	if page < 0 {
-		page = 0
-	}
-	if page >= totalPages {
-		page = totalPages - 1
-	}
-
-	var rows [][]models.InlineKeyboardButton
-
-	start := page * treePageSize
-	end := start + treePageSize
-	if end > len(dirs) {
-		end = len(dirs)
-	}
-
-	var curRow []models.InlineKeyboardButton
-	for _, d := range dirs[start:end] {
-		subDir := filepath.Join(cleanPath, d.Name())
-		tok := a.TreeState.GetToken(subDir)
-		btn := models.InlineKeyboardButton{
-			Text:         "📁 " + truncateBtnText(d.Name(), 20),
-			CallbackData: cbTreeCD + tok,
+		if len(files) > fileLimit {
+			sb.WriteString(fmt.Sprintf("• <i>... and %d more files</i>\n", len(files)-fileLimit))
 		}
-		curRow = append(curRow, btn)
-		if len(curRow) == 2 {
-			rows = append(rows, curRow)
-			curRow = nil
-		}
-	}
-	if len(curRow) > 0 {
-		rows = append(rows, curRow)
+		sb.WriteString("\n")
 	}
 
-	// Pagination row
-	if totalPages > 1 {
-		var pageRow []models.InlineKeyboardButton
-		if page > 0 {
-			pageRow = append(pageRow, models.InlineKeyboardButton{
-				Text:         "◀️ Prev",
-				CallbackData: fmt.Sprintf("%s%d:%s", cbTreePage, page-1, curToken),
-			})
-		}
-		pageRow = append(pageRow, models.InlineKeyboardButton{
-			Text:         fmt.Sprintf("%d/%d", page+1, totalPages),
-			CallbackData: cbTreeNoop,
-		})
-		if page < totalPages-1 {
-			pageRow = append(pageRow, models.InlineKeyboardButton{
-				Text:         "Next ▶️",
-				CallbackData: fmt.Sprintf("%s%d:%s", cbTreePage, page+1, curToken),
-			})
-		}
-		rows = append(rows, pageRow)
+	if len(dirs) == 0 && len(files) == 0 {
+		sb.WriteString("<i>(empty directory)</i>\n\n")
 	}
 
-	// Bottom navigation row
-	var ctrlRow []models.InlineKeyboardButton
+	sb.WriteString(fmt.Sprintf("📊 <i>%d directories, %d files</i>\n\n", len(dirs), len(files)))
+
+	// Rich text command navigation bar
+	sb.WriteString("<b>Navigation:</b>\n")
+	var navItems []string
 	if cleanPath != "/" {
-		ctrlRow = append(ctrlRow, models.InlineKeyboardButton{
-			Text:         "⬆️ Up",
-			CallbackData: cbTreeUp + curToken,
-		})
+		navItems = append(navItems, "⬆️ <b>Up:</b> /cd_up")
 	}
-	ctrlRow = append(ctrlRow, models.InlineKeyboardButton{
-		Text:         "🏠 Home",
-		CallbackData: cbTreeHome,
-	})
-	ctrlRow = append(ctrlRow, models.InlineKeyboardButton{
-		Text:         "🔄 Refresh",
-		CallbackData: cbTreeRef + curToken,
-	})
-	ctrlRow = append(ctrlRow, models.InlineKeyboardButton{
-		Text:         "❌ Close",
-		CallbackData: cbTreeClose,
-	})
-	rows = append(rows, ctrlRow)
+	navItems = append(navItems, "🏠 <b>Home:</b> /cd_home")
+	navItems = append(navItems, "🔄 <b>Refresh:</b> /cd_ref")
+	navItems = append(navItems, "❌ <b>Close:</b> /cd_close")
+	sb.WriteString(strings.Join(navItems, "  •  "))
 
-	markup := &models.InlineKeyboardMarkup{
-		InlineKeyboard: rows,
-	}
-
-	return sb.String(), markup, nil
+	return sb.String(), nil
 }
 
 func sortEntries(entries []os.DirEntry) {
@@ -509,12 +427,4 @@ func sortEntries(entries []os.DirEntry) {
 		}
 		return strings.ToLower(nameA) < strings.ToLower(nameB)
 	})
-}
-
-func truncateBtnText(s string, maxRunes int) string {
-	if utf8.RuneCountInString(s) <= maxRunes {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxRunes-2]) + ".."
 }

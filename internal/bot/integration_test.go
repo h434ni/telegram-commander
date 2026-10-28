@@ -1391,10 +1391,9 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, joined, "subfolder")
 
 	tokSub := app.TreeState.GetToken(subDir)
-	curTok := app.TreeState.GetToken(tempDir)
 
-	// 2. Click on subfolder inline button
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cd:"+tokSub))
+	// 2. Tap rich text command /cd_<token> for subfolder
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_"+tokSub))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -1403,8 +1402,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
 
-	// 3. Click Up button
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:up:"+tokSub))
+	// 3. Tap /cd_up
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_up"))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -1413,14 +1412,15 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "subfolder")
 
-	// 4. Click Refresh button
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ref:"+curTok))
+	// 4. Tap /cd_ref
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_ref"))
 
-	// 5. Click Close button
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
+	// 5. Tap /cd_close
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cd_close"))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
+	require.Greater(t, srv.deletes, 0, "incoming slash commands should be deleted")
 	srv.mu.Unlock()
 
 	joined = strings.Join(msgs, "\n")

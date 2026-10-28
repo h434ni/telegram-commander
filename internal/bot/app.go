@@ -308,11 +308,6 @@ func (a *App) handleCallback(ctx context.Context, b *bot.Bot, update *models.Upd
 		return
 	}
 
-	if strings.HasPrefix(cq.Data, cbTreePrefix) {
-		a.handleTreeCallback(ctx, b, cq)
-		return
-	}
-
 	_ = a.telegramCall(ctx, chatID, func() error {
 		_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: cq.ID,
@@ -377,6 +372,11 @@ func (a *App) handleMenuText(ctx context.Context, b *bot.Bot, msg *models.Messag
 			}
 		}
 		a.executeRawCommand(ctx, b, chatID, msg.From, text)
+		return
+	}
+
+	if strings.HasPrefix(text, "/cd_") {
+		a.handleTreeCommand(ctx, b, msg)
 		return
 	}
 
