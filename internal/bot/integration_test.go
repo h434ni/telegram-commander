@@ -1441,7 +1441,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
-	require.Contains(t, joined, "📂 subfolder")
+	require.Contains(t, joined, ">subfolder</tg-button>")
+	require.NotContains(t, joined, "🏠 Home")
 
 	// 3. Click the same folder button again to close it
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSub))
@@ -1452,7 +1453,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	lastMsg := msgs[len(msgs)-1]
 	require.NotContains(t, lastMsg, "inner.txt")
-	require.Contains(t, lastMsg, "📁 subfolder")
+	require.Contains(t, lastMsg, ">subfolder</tg-button>")
 
 	// 4. Click Close in-message button
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))

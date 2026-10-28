@@ -384,7 +384,6 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 
 	// Control bar
 	sb.WriteString("<tg-button-row align=\"left\">\n")
-	sb.WriteString("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:home\">🏠 Home</tg-button>\n")
 	sb.WriteString("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ref\">🔄 Refresh</tg-button>\n")
 	sb.WriteString("  <tg-button type=\"callback_data\" style=\"danger\" data=\"t:close\">❌ Close</tg-button>\n")
 	sb.WriteString("</tg-button-row>")
@@ -445,15 +444,8 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		tok := a.TreeState.GetToken(subPath)
 		isOpen := a.TreeState.IsExpanded(userID, subPath)
 
-		icon := "📁"
-		style := "primary"
-		if isOpen {
-			icon = "📂"
-			style = "success"
-		}
-
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" style=\"%s\" data=\"t:tog:%s\">%s %s</tg-button> <tg-button type=\"copy_text\" text=\"%s\"> </tg-button><br/>\n",
-			prefix, branch, style, tok, icon, html.EscapeString(d.Name()), html.EscapeString(subPath)))
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
+			prefix, branch, html.EscapeString(subPath), tok, html.EscapeString(d.Name())))
 		(*lineCount)++
 
 		if isOpen {
