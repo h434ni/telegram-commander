@@ -85,8 +85,8 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	tokBeta := app.TreeState.GetToken(subBeta)
 
 	// Folder names are the buttons themselves with copy button in front
-	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subAlpha+`">📋</tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokAlpha+`">📁 alpha</tg-button>`)
-	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subBeta+`">📋</tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">📁 beta</tg-button>`)
+	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subAlpha+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokAlpha+`">📁 alpha</tg-button>`)
+	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">📁 beta</tg-button>`)
 	require.Contains(t, html1, "📄 file1.txt")
 
 	// Closed by default: nested1 and deep.txt must NOT appear yet
@@ -101,10 +101,10 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Button updates to open icon and success style, retaining copy button
-	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`">📋</tg-button> <tg-button type="callback_data" style="success" data="t:tog:`+tokBeta+`">📂 beta</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="success" data="t:tog:`+tokBeta+`">📂 beta</tg-button>`)
 	// Nested directory now appears with its own copy button
 	tokNested := app.TreeState.GetToken(nestedDir)
-	require.Contains(t, html2, `<tg-button type="copy_text" text="`+nestedDir+`">📋</tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">📁 nested1</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="copy_text" text="`+nestedDir+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">📁 nested1</tg-button>`)
 
 	// 3. Press parent folder 'beta' again to close it
 	app.TreeState.ToggleExpanded(42, subBeta)
@@ -112,7 +112,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Button collapses back to closed icon and primary style
-	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`">📋</tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">📁 beta</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">📁 beta</tg-button>`)
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
 }

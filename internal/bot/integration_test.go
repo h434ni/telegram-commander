@@ -1425,7 +1425,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	joined := strings.Join(msgs, "\n")
 	require.Contains(t, joined, "Folder Explorer")
 	require.Contains(t, joined, "subfolder")
-	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s">📋</tg-button>`, subDir))
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s"> </tg-button>`, subDir))
 
 	tokSub := app.TreeState.GetToken(subDir)
 
