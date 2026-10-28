@@ -1450,8 +1450,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
-	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s"> </tg-button> <tg-button type="callback_data" style="success" data="t:file:%s">inner.txt</tg-button>`, innerPath, tokInner))
-	require.Contains(t, joined, ">subfolder</tg-button>")
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s"> </tg-button> <tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button>`, innerPath, tokInner))
+	require.Contains(t, joined, ">subfolder/</tg-button>")
 	require.NotContains(t, joined, "🏠 Home")
 
 	// 2b. Click green file button to send file as document

@@ -549,13 +549,13 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		tok := a.TreeState.GetToken(subPath)
 		isOpen := a.TreeState.IsExpanded(userID, subPath)
 
-		style := "primary"
+		folderName := d.Name()
 		if isOpen {
-			style = "success"
+			folderName += "/"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" style=\"%s\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
-			prefix, branch, html.EscapeString(subPath), style, tok, html.EscapeString(d.Name())))
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
+			prefix, branch, html.EscapeString(subPath), tok, html.EscapeString(folderName)))
 		(*lineCount)++
 
 		if isOpen {
@@ -577,7 +577,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		filePath := filepath.Join(dirPath, f.Name())
 		tok := a.TreeState.GetToken(filePath)
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" style=\"success\" data=\"t:file:%s\">%s</tg-button><br/>\n",
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button><br/>\n",
 			prefix, branch, html.EscapeString(filePath), tok, html.EscapeString(f.Name())))
 		(*lineCount)++
 	}

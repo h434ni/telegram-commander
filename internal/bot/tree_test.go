@@ -89,7 +89,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
 	file1Path := filepath.Join(tempDir, "file1.txt")
 	tokFile1 := app.TreeState.GetToken(file1Path)
-	require.Contains(t, html1, `<tg-button type="copy_text" text="`+file1Path+`"> </tg-button> <tg-button type="callback_data" style="success" data="t:file:`+tokFile1+`">file1.txt</tg-button>`)
+	require.Contains(t, html1, `<tg-button type="copy_text" text="`+file1Path+`"> </tg-button> <tg-button type="callback_data" data="t:file:`+tokFile1+`">file1.txt</tg-button>`)
 	require.NotContains(t, html1, "🏠 Home")
 	require.Contains(t, html1, "🔄 Refresh")
 	require.Contains(t, html1, "❌ Close")
@@ -105,8 +105,8 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	html2, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
-	// Button updates to success (green) when open
-	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="success" data="t:tog:`+tokBeta+`">beta</tg-button>`)
+	// Button stays blue (primary) but has a trailing slash when open
+	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button>`)
 	// Nested directory appears closed (blue) with its own copy button
 	tokNested := app.TreeState.GetToken(nestedDir)
 	require.Contains(t, html2, `<tg-button type="copy_text" text="`+nestedDir+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button>`)
@@ -116,7 +116,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	html3, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
-	// Button collapses back to primary (blue)
+	// Button collapses back to primary (blue) without trailing slash
 	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
