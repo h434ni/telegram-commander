@@ -452,8 +452,8 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			style = "success"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" style=\"%s\" data=\"t:tog:%s\">%s %s</tg-button><br/>\n",
-			prefix, branch, style, tok, icon, html.EscapeString(d.Name())))
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\">📋</tg-button> <tg-button type=\"callback_data\" style=\"%s\" data=\"t:tog:%s\">%s %s</tg-button><br/>\n",
+			prefix, branch, html.EscapeString(subPath), style, tok, icon, html.EscapeString(d.Name())))
 		(*lineCount)++
 
 		if isOpen {
