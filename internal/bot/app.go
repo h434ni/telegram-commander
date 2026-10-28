@@ -380,11 +380,6 @@ func (a *App) handleMenuText(ctx context.Context, b *bot.Bot, msg *models.Messag
 		return
 	}
 
-	if strings.HasPrefix(text, "/cd_") {
-		a.handleTreeCommand(ctx, b, msg)
-		return
-	}
-
 	if strings.HasPrefix(text, "/") {
 		a.showStatus(ctx, b, chatID, userID, "Use /start to open the menu.")
 		return

@@ -36,60 +36,90 @@ func TestTreeStateManager(t *testing.T) {
 	mgr.SetUserMessage(42, 999)
 	require.Equal(t, 999, mgr.GetUserMessageID(42))
 
+	// Expand / Collapse tracking
+	require.False(t, mgr.IsExpanded(42, p1))
+	nowOpen := mgr.ToggleExpanded(42, p1)
+	require.True(t, nowOpen)
+	require.True(t, mgr.IsExpanded(42, p1))
+
+	nowOpen = mgr.ToggleExpanded(42, p1)
+	require.False(t, nowOpen)
+	require.False(t, mgr.IsExpanded(42, p1))
+
+	mgr.ToggleExpanded(42, p1)
+	mgr.ClearExpanded(42)
+	require.False(t, mgr.IsExpanded(42, p1))
+
 	mgr.ClearUserMessage(42)
 	require.Equal(t, 0, mgr.GetUserMessageID(42))
 }
 
-func TestBuildTreeRichMessageHTML(t *testing.T) {
+func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Create subdirectories and files
-	sub1 := filepath.Join(tempDir, "beta")
-	sub2 := filepath.Join(tempDir, "alpha")
+	subBeta := filepath.Join(tempDir, "beta")
+	subAlpha := filepath.Join(tempDir, "alpha")
 	subHidden := filepath.Join(tempDir, ".config")
-	require.NoError(t, os.Mkdir(sub1, 0o755))
-	require.NoError(t, os.Mkdir(sub2, 0o755))
+	require.NoError(t, os.Mkdir(subBeta, 0o755))
+	require.NoError(t, os.Mkdir(subAlpha, 0o755))
 	require.NoError(t, os.Mkdir(subHidden, 0o755))
 
-	// Nested subdirectories
-	require.NoError(t, os.Mkdir(filepath.Join(sub1, "nested1"), 0o755))
+	// Nested subdirectories inside beta
+	nestedDir := filepath.Join(subBeta, "nested1")
+	require.NoError(t, os.Mkdir(nestedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedDir, "deep.txt"), []byte("deep"), 0o644))
 
 	// Files
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file1.txt"), []byte("hello"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file2.log"), []byte("log"), 0o644))
 
 	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
-	html, err := app.buildTreeRichMessageHTML(tempDir)
+
+	// 1. Initial view: subfolders are CLOSED by default
+	html1, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
-	require.Contains(t, html, "Folder Explorer")
-	require.Contains(t, html, tempDir)
-	require.Contains(t, html, "📁 <b>alpha</b>")
-	require.Contains(t, html, "📁 <b>beta</b>")
-	require.Contains(t, html, "📁 nested1")
-	require.Contains(t, html, "📄 file1.txt")
-	require.Contains(t, html, "2 directories, 2 files")
-	require.NotContains(t, html, ".config")
+	require.Contains(t, html1, "Folder Explorer")
+	require.Contains(t, html1, tempDir)
 
-	// Rich text <tg-button> tags
-	tokAlpha := app.TreeState.GetToken(sub2)
-	tokBeta := app.TreeState.GetToken(sub1)
-	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:cd:`+tokAlpha+`">Open</tg-button>`)
-	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:cd:`+tokBeta+`">Open</tg-button>`)
+	tokAlpha := app.TreeState.GetToken(subAlpha)
+	tokBeta := app.TreeState.GetToken(subBeta)
 
-	// Navigation buttons in <tg-button-row>
-	require.Contains(t, html, "<tg-button-row")
-	require.Contains(t, html, ">⬆️ Up</tg-button>")
-	require.Contains(t, html, ">🏠 Home</tg-button>")
-	require.Contains(t, html, ">🔄 Refresh</tg-button>")
-	require.Contains(t, html, ">❌ Close</tg-button>")
+	// Folder names are the buttons themselves
+	require.Contains(t, html1, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokAlpha+`">📁 alpha</tg-button>`)
+	require.Contains(t, html1, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">📁 beta</tg-button>`)
+	require.Contains(t, html1, "📄 file1.txt")
+
+	// Closed by default: nested1 and deep.txt must NOT appear yet
+	require.NotContains(t, html1, "nested1")
+	require.NotContains(t, html1, "deep.txt")
+	// Dot folder must NOT appear
+	require.NotContains(t, html1, ".config")
+
+	// 2. Open parent folder 'beta'
+	app.TreeState.ToggleExpanded(42, subBeta)
+	html2, err := app.buildTreeRichMessageHTML(tempDir, 42)
+	require.NoError(t, err)
+
+	// Button updates to open icon and success style
+	require.Contains(t, html2, `<tg-button type="callback_data" style="success" data="t:tog:`+tokBeta+`">📂 beta</tg-button>`)
+	// Nested directory now appears
+	require.Contains(t, html2, "📁 nested1")
+
+	// 3. Press parent folder 'beta' again to close it
+	app.TreeState.ToggleExpanded(42, subBeta)
+	html3, err := app.buildTreeRichMessageHTML(tempDir, 42)
+	require.NoError(t, err)
+
+	// Button collapses back to closed icon and primary style
+	require.Contains(t, html3, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">📁 beta</tg-button>`)
+	// Nested items are hidden again
+	require.NotContains(t, html3, "nested1")
 }
 
 func TestBuildTreeRichMessageHTMLEmptyDir(t *testing.T) {
 	tempDir := t.TempDir()
 	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
-	html, err := app.buildTreeRichMessageHTML(tempDir)
+	html, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
-	require.Contains(t, html, "(empty directory)")
-	require.Contains(t, html, "0 directories, 0 files")
+	require.Contains(t, html, "(empty)")
 }

@@ -1428,8 +1428,11 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	tokSub := app.TreeState.GetToken(subDir)
 
-	// 2. Click in-message <tg-button> for subfolder
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cd:"+tokSub))
+	// Subfolder is closed by default: inner.txt must not appear yet
+	require.NotContains(t, joined, "inner.txt")
+
+	// 2. Click in-message folder button for subfolder to open it
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSub))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -1437,16 +1440,18 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
+	require.Contains(t, joined, "📂 subfolder")
 
-	// 3. Click Up in-message button
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:up:"+tokSub))
+	// 3. Click the same folder button again to close it
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSub))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
 
-	joined = strings.Join(msgs, "\n")
-	require.Contains(t, joined, "subfolder")
+	lastMsg := msgs[len(msgs)-1]
+	require.NotContains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, "📁 subfolder")
 
 	// 4. Click Close in-message button
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
@@ -1455,6 +1460,6 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
 
-	joined = strings.Join(msgs, "\n")
-	require.Contains(t, joined, "closed")
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "closed")
 }
