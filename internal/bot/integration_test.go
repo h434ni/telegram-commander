@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1336,4 +1337,92 @@ func TestDeliveryRetryPermanentErrorNoRetry(t *testing.T) {
 	require.Empty(t, srv.messages)
 	require.Equal(t, 1, srv.sendAttempts, "permanent errors must not retry")
 	require.Equal(t, 4, srv.failSendN, "only one failure should have been consumed")
+}
+
+func TestTreeExplorerIntegration(t *testing.T) {
+	srv := &apiServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "subfolder")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "inner.txt"), []byte("inner"), 0o644))
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			API:          ts.URL,
+			BotToken:     "123:ABC",
+			AllowedUsers: []string{"42"},
+		},
+		Menu: []config.ButtonNode{
+			{
+				Name:     "tg-tree",
+				Type:     "button",
+				Function: "tg-tree",
+				Path:     tempDir,
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	reg := function.NewRegistry()
+	app := bot.NewApp(cfg, reg, &executor.FakeExecutor{}, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, ts.Client()),
+		tgbot.WithServerURL(ts.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// 1. Open menu and tap tg-tree button
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+
+	joined := strings.Join(msgs, "\n")
+	require.Contains(t, joined, "Folder Explorer")
+	require.Contains(t, joined, "subfolder")
+
+	tokSub := app.TreeState.GetToken(subDir)
+	curTok := app.TreeState.GetToken(tempDir)
+
+	// 2. Click on subfolder inline button
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cd:"+tokSub))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+
+	joined = strings.Join(msgs, "\n")
+	require.Contains(t, joined, "inner.txt")
+
+	// 3. Click Up button
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:up:"+tokSub))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+
+	joined = strings.Join(msgs, "\n")
+	require.Contains(t, joined, "subfolder")
+
+	// 4. Click Refresh button
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ref:"+curTok))
+
+	// 5. Click Close button
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+
+	joined = strings.Join(msgs, "\n")
+	require.Contains(t, joined, "closed")
 }

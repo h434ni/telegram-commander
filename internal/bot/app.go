@@ -24,11 +24,12 @@ import (
 
 // App wires config, functions, executor and Telegram handlers.
 type App struct {
-	Cfg      *config.Config
-	Registry *function.Registry
-	Exec     executor.Executor
-	Index    *Index
-	Log      *slog.Logger
+	Cfg       *config.Config
+	Registry  *function.Registry
+	Exec      executor.Executor
+	Index     *Index
+	Log       *slog.Logger
+	TreeState *TreeStateManager
 
 	navMu     sync.Mutex
 	nav       map[int64]userMenu
@@ -64,12 +65,17 @@ func NewApp(cfg *config.Config, reg *function.Registry, exec executor.Executor, 
 	}
 	idx := BuildIndex(cfg.Menu, cfg.MenuColumns, cfg.PageSize)
 	idx.EnableRunCommand = cfg.EnableRunCommand
+	home := ""
+	if cfg != nil && cfg.WorkDir != "" {
+		home = cfg.WorkDir
+	}
 	return &App{
 		Cfg:       cfg,
 		Registry:  reg,
 		Exec:      exec,
 		Index:     idx,
 		Log:       log,
+		TreeState: NewTreeStateManager(home),
 		nav:       make(map[int64]userMenu),
 		confirms:  make(map[int64]confirmWait),
 		sendLocks: make(map[int64]*sync.Mutex),
@@ -286,6 +292,27 @@ func (a *App) handleCallback(ctx context.Context, b *bot.Bot, update *models.Upd
 	if cq.Message.Message != nil {
 		chatID = cq.Message.Message.Chat.ID
 	}
+	user := cq.From
+	if !a.isAllowed(&user) {
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            a.denyMessage(&user),
+				ShowAlert:       true,
+			})
+			return err
+		})
+		return
+	}
+	if chatID == 0 {
+		return
+	}
+
+	if strings.HasPrefix(cq.Data, cbTreePrefix) {
+		a.handleTreeCallback(ctx, b, cq)
+		return
+	}
+
 	_ = a.telegramCall(ctx, chatID, func() error {
 		_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: cq.ID,
@@ -293,13 +320,6 @@ func (a *App) handleCallback(ctx context.Context, b *bot.Bot, update *models.Upd
 		})
 		return err
 	})
-	user := cq.From
-	if !a.isAllowed(&user) {
-		return
-	}
-	if chatID == 0 {
-		return
-	}
 	a.applyAction(ctx, b, chatID, &user, cq.Data)
 }
 
@@ -655,6 +675,12 @@ func (a *App) clearConfirm(userID int64) {
 }
 
 func (a *App) executeButton(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node, input string) {
+	if a.isTreeButton(node) {
+		a.deleteNavMessage(ctx, b, chatID, user.ID)
+		a.startTreeExplorer(ctx, b, chatID, user, node)
+		return
+	}
+
 	def, ok := a.Registry.GetCaseInsensitive(node.Function)
 	if !ok {
 		a.showStatus(ctx, b, chatID, user.ID, fmt.Sprintf("Unknown function %q", node.Function))

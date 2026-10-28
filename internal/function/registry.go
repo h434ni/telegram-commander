@@ -21,6 +21,7 @@ var namePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 var ReservedNames = map[string]struct{}{
 	"command": {},
 	"script":  {},
+	"tg-tree": {},
 }
 
 var reservedParamNames = map[string]struct{}{
@@ -60,6 +61,7 @@ func NewRegistry() *Registry {
 	}
 	r.mustRegister(builtinCommand())
 	r.mustRegister(builtinScript())
+	r.mustRegister(builtinTgTree())
 	return r
 }
 
@@ -129,6 +131,16 @@ func builtinScript() *Definition {
 		Params: []ParamSpec{
 			{Name: "path", Type: "string", Required: true, Description: "Path to the script"},
 			{Name: "args", Type: "string", Required: false, Description: "Optional arguments"},
+		},
+	}
+}
+
+func builtinTgTree() *Definition {
+	return &Definition{
+		Name:   "tg-tree",
+		Source: "builtin",
+		Params: []ParamSpec{
+			{Name: "path", Type: "string", Required: false, Description: "Starting directory path (defaults to user home)"},
 		},
 	}
 }
