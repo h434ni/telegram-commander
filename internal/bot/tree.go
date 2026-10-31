@@ -21,6 +21,7 @@ const (
 	cbTreePrefix = "t:"
 	cbTreeTog    = "t:tog:"
 	cbTreeFile   = "t:file:"
+	cbTreeSend   = "t:send:"
 	cbTreeHome   = "t:home"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
@@ -31,14 +32,15 @@ const (
 
 // TreeStateManager maps directory paths to tokens and tracks expanded state per user.
 type TreeStateManager struct {
-	mu           sync.RWMutex
-	rnd          *rand.Rand
-	paths        map[string]string         // token -> path
-	tokens       map[string]string         // path -> token
-	userPaths    map[int64]string          // userID -> root path
-	userMessages map[int64]int             // userID -> message ID of active tree
-	expanded     map[int64]map[string]bool // userID -> set of expanded clean paths
-	homePath     string
+	mu              sync.RWMutex
+	rnd             *rand.Rand
+	paths           map[string]string         // token -> path
+	tokens          map[string]string         // path -> token
+	userPaths       map[int64]string          // userID -> root path
+	userMessages    map[int64]int             // userID -> message ID of active tree
+	expanded        map[int64]map[string]bool // userID -> set of expanded clean paths
+	selectedFolders map[int64]string          // userID -> last clicked folder path
+	homePath        string
 }
 
 // NewTreeStateManager creates a new state manager with a default home path.
@@ -53,13 +55,14 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		home = abs
 	}
 	return &TreeStateManager{
-		rnd:          rand.New(rand.NewSource(time.Now().UnixNano())),
-		paths:        make(map[string]string),
-		tokens:       make(map[string]string),
-		userPaths:    make(map[int64]string),
-		userMessages: make(map[int64]int),
-		expanded:     make(map[int64]map[string]bool),
-		homePath:     filepath.Clean(home),
+		rnd:             rand.New(rand.NewSource(time.Now().UnixNano())),
+		paths:           make(map[string]string),
+		tokens:          make(map[string]string),
+		userPaths:       make(map[int64]string),
+		userMessages:    make(map[int64]int),
+		expanded:        make(map[int64]map[string]bool),
+		selectedFolders: make(map[int64]string),
+		homePath:        filepath.Clean(home),
 	}
 }
 
@@ -177,12 +180,31 @@ func (m *TreeStateManager) GetUserMessageID(userID int64) int {
 	return m.userMessages[userID]
 }
 
+// SetSelectedFolder records the folder last clicked by the user.
+func (m *TreeStateManager) SetSelectedFolder(userID int64, path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if path == "" {
+		delete(m.selectedFolders, userID)
+		return
+	}
+	m.selectedFolders[userID] = filepath.Clean(path)
+}
+
+// GetSelectedFolder returns the folder last clicked by the user.
+func (m *TreeStateManager) GetSelectedFolder(userID int64) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.selectedFolders[userID]
+}
+
 // ClearUserMessage resets the tracked tree message for the user.
 func (m *TreeStateManager) ClearUserMessage(userID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.userMessages, userID)
 	delete(m.expanded, userID)
+	delete(m.selectedFolders, userID)
 }
 
 // isTreeButton returns true if the node targets the tree feature.
@@ -221,6 +243,7 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 	}
 
 	a.TreeState.ClearExpanded(user.ID)
+	a.TreeState.SetSelectedFolder(user.ID, "")
 	a.TreeState.SetUserPath(user.ID, absPath)
 	richHTML, err := a.buildTreeRichMessageHTML(absPath, user.ID)
 	if err != nil {
@@ -313,6 +336,7 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return
 		}
 		nowOpen := a.TreeState.ToggleExpanded(cq.From.ID, targetPath)
+		a.TreeState.SetSelectedFolder(cq.From.ID, targetPath)
 		toastText := "Opened " + filepath.Base(targetPath)
 		if !nowOpen {
 			toastText = "Closed " + filepath.Base(targetPath)
@@ -328,6 +352,65 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 
 	case strings.HasPrefix(data, cbTreeFile):
 		tok := strings.TrimPrefix(data, cbTreeFile)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "File reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access file: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if fi.IsDir() {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is a directory.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Selected " + filepath.Base(targetPath),
+			})
+			return aErr
+		})
+
+		fileHTML := buildFileRichMessageHTML(targetPath, tok, fi.Size())
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+				ChatID: chatID,
+				RichMessage: models.InputRichMessage{
+					HTML: fileHTML,
+				},
+			})
+			return sErr
+		})
+
+	case strings.HasPrefix(data, cbTreeSend):
+		tok := strings.TrimPrefix(data, cbTreeSend)
 		targetPath := a.TreeState.GetPath(tok)
 		if targetPath == "" {
 			_ = a.telegramCall(ctx, chatID, func() error {
@@ -487,11 +570,12 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	a.renderDirTree(&sb, cleanPath, "", userID, &lineCount)
 	sb.WriteString("</p>\n")
 
-	// Control bar
-	sb.WriteString("<tg-button-row align=\"left\">\n")
-	sb.WriteString("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ref\">🔄 Refresh</tg-button>\n")
-	sb.WriteString("  <tg-button type=\"callback_data\" style=\"danger\" data=\"t:close\">❌ Close</tg-button>\n")
-	sb.WriteString("</tg-button-row>")
+	// If a folder has been clicked, add Copy button for that folder
+	if selFolder := a.TreeState.GetSelectedFolder(userID); selFolder != "" {
+		sb.WriteString("<tg-button-row align=\"left\">\n")
+		sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">📋 Copy</tg-button>\n", html.EscapeString(selFolder)))
+		sb.WriteString("</tg-button-row>")
+	}
 
 	return sb.String(), nil
 }
@@ -554,8 +638,8 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			folderName += "/"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
-			prefix, branch, html.EscapeString(subPath), tok, html.EscapeString(folderName)))
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
+			prefix, branch, tok, html.EscapeString(folderName)))
 		(*lineCount)++
 
 		if isOpen {
@@ -577,8 +661,8 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		filePath := filepath.Join(dirPath, f.Name())
 		tok := a.TreeState.GetToken(filePath)
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"copy_text\" text=\"%s\"> </tg-button> <tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button><br/>\n",
-			prefix, branch, html.EscapeString(filePath), tok, html.EscapeString(f.Name())))
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button><br/>\n",
+			prefix, branch, tok, html.EscapeString(f.Name())))
 		(*lineCount)++
 	}
 }
@@ -587,4 +671,29 @@ func sortEntries(entries []os.DirEntry) {
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
 	})
+}
+
+func formatFileSize(bytes int64) string {
+	switch {
+	case bytes >= 1024*1024*1024:
+		return fmt.Sprintf("%.1f GB", float64(bytes)/(1024*1024*1024))
+	case bytes >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	case bytes >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+// buildFileRichMessageHTML formats the message sent when a file is selected.
+func buildFileRichMessageHTML(filePath, tok string, size int64) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("<p>📄 <b>%s</b> (%s)<br/>\n", html.EscapeString(filepath.Base(filePath)), formatFileSize(size)))
+	sb.WriteString("<code>" + html.EscapeString(filePath) + "</code></p>\n")
+	sb.WriteString("<tg-button-row align=\"left\">\n")
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">📋 Copy</tg-button>\n", html.EscapeString(filePath)))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">📥 Send File</tg-button>\n", tok))
+	sb.WriteString("</tg-button-row>")
+	return sb.String()
 }

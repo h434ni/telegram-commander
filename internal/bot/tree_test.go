@@ -42,6 +42,11 @@ func TestTreeStateManager(t *testing.T) {
 	require.True(t, nowOpen)
 	require.True(t, mgr.IsExpanded(42, p1))
 
+	// Selected folder tracking
+	require.Empty(t, mgr.GetSelectedFolder(42))
+	mgr.SetSelectedFolder(42, p1)
+	require.Equal(t, p1, mgr.GetSelectedFolder(42))
+
 	nowOpen = mgr.ToggleExpanded(42, p1)
 	require.False(t, nowOpen)
 	require.False(t, mgr.IsExpanded(42, p1))
@@ -52,6 +57,7 @@ func TestTreeStateManager(t *testing.T) {
 
 	mgr.ClearUserMessage(42)
 	require.Equal(t, 0, mgr.GetUserMessageID(42))
+	require.Empty(t, mgr.GetSelectedFolder(42))
 }
 
 func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
@@ -74,7 +80,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 
 	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
 
-	// 1. Initial view: subfolders are CLOSED by default
+	// 1. Initial view: subfolders are CLOSED by default, no individual line copy buttons, no close/refresh buttons
 	html1, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
@@ -84,15 +90,16 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	tokAlpha := app.TreeState.GetToken(subAlpha)
 	tokBeta := app.TreeState.GetToken(subBeta)
 
-	// Folder names are blue (primary) buttons with copy button in front, no folder emojis
-	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subAlpha+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokAlpha+`">alpha</tg-button>`)
-	require.Contains(t, html1, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
+	// Folder names are blue (primary) buttons without line-level copy buttons
+	require.Contains(t, html1, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokAlpha+`">alpha</tg-button>`)
+	require.Contains(t, html1, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
 	file1Path := filepath.Join(tempDir, "file1.txt")
 	tokFile1 := app.TreeState.GetToken(file1Path)
-	require.Contains(t, html1, `<tg-button type="copy_text" text="`+file1Path+`"> </tg-button> <tg-button type="callback_data" data="t:file:`+tokFile1+`">file1.txt</tg-button>`)
+	require.Contains(t, html1, `<tg-button type="callback_data" data="t:file:`+tokFile1+`">file1.txt</tg-button>`)
+	require.NotContains(t, html1, `type="copy_text"`)
 	require.NotContains(t, html1, "🏠 Home")
-	require.Contains(t, html1, "🔄 Refresh")
-	require.Contains(t, html1, "❌ Close")
+	require.NotContains(t, html1, "🔄 Refresh")
+	require.NotContains(t, html1, "❌ Close")
 
 	// Closed by default: nested1 and deep.txt must NOT appear yet
 	require.NotContains(t, html1, "nested1")
@@ -100,16 +107,20 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Dot folder must NOT appear
 	require.NotContains(t, html1, ".config")
 
-	// 2. Open parent folder 'beta'
+	// 2. Open parent folder 'beta' and select it
 	app.TreeState.ToggleExpanded(42, subBeta)
+	app.TreeState.SetSelectedFolder(42, subBeta)
 	html2, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
 	// Button stays blue (primary) but has a trailing slash when open
-	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button>`)
-	// Nested directory appears closed (blue) with its own copy button
+	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button>`)
+	// Nested directory appears closed (blue)
 	tokNested := app.TreeState.GetToken(nestedDir)
-	require.Contains(t, html2, `<tg-button type="copy_text" text="`+nestedDir+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button>`)
+	// Bottom control row now contains Copy button for beta
+	require.Contains(t, html2, `<tg-button-row align="left">`)
+	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`">📋 Copy</tg-button>`)
 
 	// 3. Press parent folder 'beta' again to close it
 	app.TreeState.ToggleExpanded(42, subBeta)
@@ -117,9 +128,24 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Button collapses back to primary (blue) without trailing slash
-	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`"> </tg-button> <tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
+	// Copy button remains for last-clicked folder
+	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`">📋 Copy</tg-button>`)
+}
+
+func TestBuildFileRichMessageHTML(t *testing.T) {
+	filePath := "/path/to/test.txt"
+	tok := "abc1"
+	size := int64(1024)
+
+	html := buildFileRichMessageHTML(filePath, tok, size)
+	require.Contains(t, html, "test.txt")
+	require.Contains(t, html, "1.0 KB")
+	require.Contains(t, html, "<code>/path/to/test.txt</code>")
+	require.Contains(t, html, `<tg-button type="copy_text" text="/path/to/test.txt">📋 Copy</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:send:abc1">📥 Send File</tg-button>`)
 }
 
 func TestBuildTreeRichMessageHTMLEmptyDir(t *testing.T) {
