@@ -573,7 +573,8 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	// If a folder has been clicked, add Copy button for that folder
 	if selFolder := a.TreeState.GetSelectedFolder(userID); selFolder != "" {
 		sb.WriteString("<tg-button-row align=\"left\">\n")
-		sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">📋 Copy</tg-button>\n", html.EscapeString(selFolder)))
+		sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">%s</tg-button>\n",
+			html.EscapeString(selFolder), html.EscapeString(copyButtonLabel(selFolder))))
 		sb.WriteString("</tg-button-row>")
 	}
 
@@ -686,13 +687,22 @@ func formatFileSize(bytes int64) string {
 	}
 }
 
+func copyButtonLabel(path string) string {
+	base := filepath.Base(path)
+	if base == "/" || base == "." {
+		return "copy " + base
+	}
+	return "copy .../" + base
+}
+
 // buildFileRichMessageHTML formats the message sent when a file is selected.
 func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<p>📄 <b>%s</b> (%s)<br/>\n", html.EscapeString(filepath.Base(filePath)), formatFileSize(size)))
 	sb.WriteString("<code>" + html.EscapeString(filePath) + "</code></p>\n")
 	sb.WriteString("<tg-button-row align=\"left\">\n")
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">📋 Copy</tg-button>\n", html.EscapeString(filePath)))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">%s</tg-button>\n",
+		html.EscapeString(filePath), html.EscapeString(copyButtonLabel(filePath))))
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">📥 Send File</tg-button>\n", tok))
 	sb.WriteString("</tg-button-row>")
 	return sb.String()

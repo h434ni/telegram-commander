@@ -1457,7 +1457,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, joined, "inner.txt")
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button>`, tokInner))
 	require.Contains(t, joined, ">subfolder/</tg-button>")
-	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s">📋 Copy</tg-button>`, subDir))
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" text="%s">copy .../subfolder</tg-button>`, subDir))
 	require.NotContains(t, joined, "🏠 Home")
 
 	// 2b. Click file button: sends a new message with Copy and Send File buttons instead of sending document directly
@@ -1470,7 +1470,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	fileMsg := msgs[len(msgs)-1]
 	require.Contains(t, fileMsg, "inner.txt")
-	require.Contains(t, fileMsg, fmt.Sprintf(`<tg-button type="copy_text" text="%s">📋 Copy</tg-button>`, innerPath))
+	require.Contains(t, fileMsg, fmt.Sprintf(`<tg-button type="copy_text" text="%s">copy .../inner.txt</tg-button>`, innerPath))
 	require.Contains(t, fileMsg, fmt.Sprintf(`<tg-button type="callback_data" style="primary" data="t:send:%s">📥 Send File</tg-button>`, tokInner))
 
 	// 2c. Click Send File button to send file as document
@@ -1518,7 +1518,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	lastMsg := msgs[len(msgs)-1]
 	require.NotContains(t, lastMsg, "inner.txt")
 	require.Contains(t, lastMsg, ">subfolder</tg-button>")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" text="%s">📋 Copy</tg-button>`, subDir))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" text="%s">copy .../subfolder</tg-button>`, subDir))
 
 	// 4. Click Close callback
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
