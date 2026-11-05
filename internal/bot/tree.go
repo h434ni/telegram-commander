@@ -723,7 +723,11 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		nextPrefix := prefix + "│"
 		if isLast {
 			branch = "└"
-			nextPrefix = prefix + "  "
+			if prefix == "" {
+				nextPrefix = "  "
+			} else {
+				nextPrefix = prefix + " "
+			}
 		}
 
 		subPath := filepath.Join(dirPath, d.Name())

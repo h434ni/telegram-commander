@@ -200,21 +200,27 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	tempDir := t.TempDir()
 	lastFolder := filepath.Join(tempDir, "lastfolder")
 	require.NoError(t, os.Mkdir(lastFolder, 0o755))
-	childFile := filepath.Join(lastFolder, "child.txt")
+	subLast := filepath.Join(lastFolder, "sublast")
+	require.NoError(t, os.Mkdir(subLast, 0o755))
+	childFile := filepath.Join(subLast, "child.txt")
 	require.NoError(t, os.WriteFile(childFile, []byte("content"), 0o644))
 
 	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
 	app.TreeState.ToggleExpanded(42, lastFolder)
+	app.TreeState.ToggleExpanded(42, subLast)
 	app.TreeState.SetSelectedItem(42, lastFolder)
 
 	html, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
-	// Parent folder is the last folder (branch └)
+	// Parent folder is the root last folder (branch └)
 	tokLast := app.TreeState.GetToken(lastFolder)
 	require.Contains(t, html, `└<tg-button type="callback_data" style="primary" data="t:tog:`+tokLast+`">lastfolder/</tg-button> 👈<br/>`)
-	// Children go front by another space: "  └"
+	// Children of root last folder shifted 1 space forward: "  └"
+	tokSub := app.TreeState.GetToken(subLast)
+	require.Contains(t, html, `  └<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">sublast/</tg-button><br/>`)
+	// In that content, the nested last folder still has one space before it so it doesn't shift more forward: "   └"
 	tokChild := app.TreeState.GetToken(childFile)
-	require.Contains(t, html, `  └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
+	require.Contains(t, html, `   └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
 	// Separator followed by a new line (<br/>)
 	require.Contains(t, html, "<hr/>\n<br/>\n<p><code>")
 }
