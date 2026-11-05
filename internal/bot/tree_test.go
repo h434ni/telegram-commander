@@ -120,7 +120,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button>`)
 	// Bottom control row now contains Copy button for beta
 	require.Contains(t, html2, `<tg-button-row align="left">`)
-	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`">copy .../beta</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="copy_text" text="`+subBeta+`">copy beta/ path</tg-button>`)
 
 	// 3. Press parent folder 'beta' again to close it
 	app.TreeState.ToggleExpanded(42, subBeta)
@@ -132,7 +132,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
 	// Copy button remains for last-clicked folder
-	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`">copy .../beta</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="copy_text" text="`+subBeta+`">copy beta/ path</tg-button>`)
 }
 
 func TestBuildFileRichMessageHTML(t *testing.T) {
@@ -144,8 +144,8 @@ func TestBuildFileRichMessageHTML(t *testing.T) {
 	require.Contains(t, html, "test.txt")
 	require.Contains(t, html, "1.0 KB")
 	require.Contains(t, html, "<code>/path/to/test.txt</code>")
-	require.Contains(t, html, `<tg-button type="copy_text" text="/path/to/test.txt">copy .../test.txt</tg-button>`)
-	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:send:abc1">📥 Send File</tg-button>`)
+	require.Contains(t, html, `<tg-button type="copy_text" text="/path/to/test.txt">copy test.txt path</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:send:abc1">get file</tg-button>`)
 }
 
 func TestBuildTreeRichMessageHTMLEmptyDir(t *testing.T) {
