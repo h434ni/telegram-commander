@@ -118,9 +118,11 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Nested directory appears closed (blue)
 	tokNested := app.TreeState.GetToken(nestedDir)
 	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button>`)
-	// Bottom control row now contains Copy and get folder buttons for beta in centered one-cell invisible table
-	require.Contains(t, html2, "<table>")
-	require.Contains(t, html2, `<td align="center"><tg-button type="copy_text" text="`+subBeta+`">copy 'beta' path</tg-button> <tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">get folder</tg-button></td>`)
+	// Bottom control row now contains Copy and get folder buttons for beta in tg-button-row
+	require.NotContains(t, html2, "<table>")
+	require.Contains(t, html2, `<tg-button-row align="left">`)
+	require.Contains(t, html2, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy path</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">get 'beta.zip'</tg-button>`)
 
 	// 3. Press parent folder 'beta' again to close it
 	app.TreeState.ToggleExpanded(42, subBeta)
@@ -132,13 +134,15 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
 	// Copy and get folder buttons remain for last-clicked folder
-	require.Contains(t, html3, `<td align="center"><tg-button type="copy_text" text="`+subBeta+`">copy 'beta' path</tg-button> <tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">get folder</tg-button></td>`)
+	require.Contains(t, html3, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy path</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">get 'beta.zip'</tg-button>`)
 
 	// 4. Select a file in the tree: it mixes copy path and get file buttons directly into the tree message
 	app.TreeState.SetSelectedItem(42, file1Path)
 	htmlFile, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
-	require.Contains(t, htmlFile, `<td align="center"><tg-button type="copy_text" text="`+file1Path+`">copy 'file1.txt' path</tg-button> <tg-button type="callback_data" style="success" data="t:send:`+tokFile1+`">get file</tg-button></td>`)
+	require.Contains(t, htmlFile, `<tg-button type="copy_text" style="success" text="`+file1Path+`">copy path</tg-button>`)
+	require.Contains(t, htmlFile, `<tg-button type="callback_data" style="success" data="t:send:`+tokFile1+`">get 'file1.txt'</tg-button>`)
 }
 
 func TestCreateZipArchive(t *testing.T) {
@@ -161,8 +165,10 @@ func TestBuildFileRichMessageHTML(t *testing.T) {
 	require.Contains(t, html, "test.txt")
 	require.Contains(t, html, "1.0 KB")
 	require.Contains(t, html, "<code>/path/to/test.txt</code>")
-	require.Contains(t, html, "<table>")
-	require.Contains(t, html, `<td align="center"><tg-button type="copy_text" text="/path/to/test.txt">copy 'test.txt' path</tg-button> <tg-button type="callback_data" style="success" data="t:send:abc1">get file</tg-button></td>`)
+	require.NotContains(t, html, "<table>")
+	require.Contains(t, html, `<tg-button-row align="left">`)
+	require.Contains(t, html, `<tg-button type="copy_text" style="success" text="/path/to/test.txt">copy path</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:send:abc1">get 'test.txt'</tg-button>`)
 }
 
 func TestBuildTreeRichMessageHTMLEmptyDir(t *testing.T) {

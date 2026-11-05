@@ -1512,7 +1512,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, joined, "inner.txt")
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button>`, tokInner))
 	require.Contains(t, joined, ">subfolder/</tg-button>")
-	require.Contains(t, joined, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'subfolder' path</tg-button> <tg-button type="callback_data" style="success" data="t:zip:%s">get folder</tg-button></td>`, subDir, tokSub))
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy path</tg-button>`, subDir))
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">get 'subfolder.zip'</tg-button>`, tokSub))
 	require.NotContains(t, joined, "🏠 Home")
 
 	// 2b. Click file button: edits tree message in place to show copy path and get file buttons
@@ -1525,7 +1526,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	lastMsg := msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "inner.txt")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'inner.txt' path</tg-button> <tg-button type="callback_data" style="success" data="t:send:%s">get file</tg-button></td>`, innerPath, tokInner))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy path</tg-button>`, innerPath))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:send:%s">get 'inner.txt'</tg-button>`, tokInner))
 
 	// 2c. Click get file button to send file as document
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:send:"+tokInner))
@@ -1581,7 +1583,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	lastMsg = msgs[len(msgs)-1]
 	require.NotContains(t, lastMsg, "inner.txt")
 	require.Contains(t, lastMsg, ">subfolder</tg-button>")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'subfolder' path</tg-button> <tg-button type="callback_data" style="success" data="t:zip:%s">get folder</tg-button></td>`, subDir, tokSub))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy path</tg-button>`, subDir))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">get 'subfolder.zip'</tg-button>`, tokSub))
 
 	// 4. Click Close callback
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
