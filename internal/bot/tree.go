@@ -653,7 +653,7 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	if sel := a.TreeState.GetSelectedItem(userID); sel != "" {
 		if fi, err := os.Stat(sel); err == nil {
 			tok := a.TreeState.GetToken(sel)
-			sb.WriteString("<hr/>\n<br/>\n")
+			sb.WriteString("<br/>\n<hr/>\n")
 			home := ""
 			if a.TreeState != nil {
 				home = a.TreeState.Home()
@@ -825,7 +825,7 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<p>📄 <b>%s</b> (%s)<br/>\n", html.EscapeString(filepath.Base(filePath)), formatFileSize(size)))
 	sb.WriteString("<code>" + html.EscapeString(filePath) + "</code></p>\n")
-	sb.WriteString("<hr/>\n<br/>\n")
+	sb.WriteString("<br/>\n<hr/>\n")
 	sb.WriteString("<tg-button-row align=\"left\">\n")
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 		html.EscapeString(filePath), copyButtonLabel(filePath)))

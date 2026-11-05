@@ -221,6 +221,6 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	// In that content, the nested last folder still has one space before it so it doesn't shift more forward: "   └"
 	tokChild := app.TreeState.GetToken(childFile)
 	require.Contains(t, html, `   └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
-	// Separator followed by a new line (<br/>)
-	require.Contains(t, html, "<hr/>\n<br/>\n<p><code>")
+	// Separator preceded by a new line (<br/>)
+	require.Contains(t, html, "<br/>\n<hr/>\n<p><code>")
 }
