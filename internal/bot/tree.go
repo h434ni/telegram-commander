@@ -656,10 +656,10 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 			sb.WriteString("<table>\n")
 			sb.WriteString("  <tr>\n")
 			if fi.IsDir() {
-				sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:zip:%s\">get folder</tg-button></td>\n",
+				sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">get folder</tg-button></td>\n",
 					html.EscapeString(sel), copyButtonLabel(sel), tok))
 			} else {
-				sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">get file</tg-button></td>\n",
+				sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">get file</tg-button></td>\n",
 					html.EscapeString(sel), copyButtonLabel(sel), tok))
 			}
 			sb.WriteString("  </tr>\n")
@@ -788,7 +788,7 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	sb.WriteString("<code>" + html.EscapeString(filePath) + "</code></p>\n")
 	sb.WriteString("<table>\n")
 	sb.WriteString("  <tr>\n")
-	sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">get file</tg-button></td>\n",
+	sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">get file</tg-button></td>\n",
 		html.EscapeString(filePath), copyButtonLabel(filePath), tok))
 	sb.WriteString("  </tr>\n")
 	sb.WriteString("</table>")
