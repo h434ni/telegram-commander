@@ -1,10 +1,12 @@
 package bot
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"fmt"
 	"html"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -22,6 +24,7 @@ const (
 	cbTreeTog    = "t:tog:"
 	cbTreeFile   = "t:file:"
 	cbTreeSend   = "t:send:"
+	cbTreeZip    = "t:zip:"
 	cbTreeHome   = "t:home"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
@@ -32,15 +35,15 @@ const (
 
 // TreeStateManager maps directory paths to tokens and tracks expanded state per user.
 type TreeStateManager struct {
-	mu              sync.RWMutex
-	rnd             *rand.Rand
-	paths           map[string]string         // token -> path
-	tokens          map[string]string         // path -> token
-	userPaths       map[int64]string          // userID -> root path
-	userMessages    map[int64]int             // userID -> message ID of active tree
-	expanded        map[int64]map[string]bool // userID -> set of expanded clean paths
-	selectedFolders map[int64]string          // userID -> last clicked folder path
-	homePath        string
+	mu            sync.RWMutex
+	rnd           *rand.Rand
+	paths         map[string]string         // token -> path
+	tokens        map[string]string         // path -> token
+	userPaths     map[int64]string          // userID -> root path
+	userMessages  map[int64]int             // userID -> message ID of active tree
+	expanded      map[int64]map[string]bool // userID -> set of expanded clean paths
+	selectedItems map[int64]string          // userID -> last clicked folder or file path
+	homePath      string
 }
 
 // NewTreeStateManager creates a new state manager with a default home path.
@@ -55,14 +58,14 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		home = abs
 	}
 	return &TreeStateManager{
-		rnd:             rand.New(rand.NewSource(time.Now().UnixNano())),
-		paths:           make(map[string]string),
-		tokens:          make(map[string]string),
-		userPaths:       make(map[int64]string),
-		userMessages:    make(map[int64]int),
-		expanded:        make(map[int64]map[string]bool),
-		selectedFolders: make(map[int64]string),
-		homePath:        filepath.Clean(home),
+		rnd:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		paths:         make(map[string]string),
+		tokens:        make(map[string]string),
+		userPaths:     make(map[int64]string),
+		userMessages:  make(map[int64]int),
+		expanded:      make(map[int64]map[string]bool),
+		selectedItems: make(map[int64]string),
+		homePath:      filepath.Clean(home),
 	}
 }
 
@@ -180,22 +183,32 @@ func (m *TreeStateManager) GetUserMessageID(userID int64) int {
 	return m.userMessages[userID]
 }
 
-// SetSelectedFolder records the folder last clicked by the user.
-func (m *TreeStateManager) SetSelectedFolder(userID int64, path string) {
+// SetSelectedItem records the folder or file last clicked by the user.
+func (m *TreeStateManager) SetSelectedItem(userID int64, path string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if path == "" {
-		delete(m.selectedFolders, userID)
+		delete(m.selectedItems, userID)
 		return
 	}
-	m.selectedFolders[userID] = filepath.Clean(path)
+	m.selectedItems[userID] = filepath.Clean(path)
 }
 
-// GetSelectedFolder returns the folder last clicked by the user.
-func (m *TreeStateManager) GetSelectedFolder(userID int64) string {
+// GetSelectedItem returns the folder or file last clicked by the user.
+func (m *TreeStateManager) GetSelectedItem(userID int64) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.selectedFolders[userID]
+	return m.selectedItems[userID]
+}
+
+// SetSelectedFolder records the folder last clicked by the user (alias for SetSelectedItem).
+func (m *TreeStateManager) SetSelectedFolder(userID int64, path string) {
+	m.SetSelectedItem(userID, path)
+}
+
+// GetSelectedFolder returns the folder last clicked by the user (alias for GetSelectedItem).
+func (m *TreeStateManager) GetSelectedFolder(userID int64) string {
+	return m.GetSelectedItem(userID)
 }
 
 // ClearUserMessage resets the tracked tree message for the user.
@@ -204,7 +217,7 @@ func (m *TreeStateManager) ClearUserMessage(userID int64) {
 	defer m.mu.Unlock()
 	delete(m.userMessages, userID)
 	delete(m.expanded, userID)
-	delete(m.selectedFolders, userID)
+	delete(m.selectedItems, userID)
 }
 
 // isTreeButton returns true if the node targets the tree feature.
@@ -390,6 +403,7 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return
 		}
 
+		a.TreeState.SetSelectedItem(cq.From.ID, targetPath)
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
@@ -397,17 +411,83 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			})
 			return aErr
 		})
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
 
-		fileHTML := buildFileRichMessageHTML(targetPath, tok, fi.Size())
-		_ = a.telegramCall(ctx, chatID, func() error {
-			_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
-				ChatID: chatID,
-				RichMessage: models.InputRichMessage{
-					HTML: fileHTML,
-				},
+	case strings.HasPrefix(data, cbTreeZip):
+		tok := strings.TrimPrefix(data, cbTreeZip)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Directory reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
 			})
+			return
+		}
+
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access directory: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if !fi.IsDir() {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is not a directory.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Zipping " + filepath.Base(targetPath) + "...",
+			})
+			return aErr
+		})
+
+		zipData, err := createZipArchive(targetPath, maxFileSendSize)
+		if err != nil {
+			a.Log.Error("failed to create zip archive", "path", targetPath, "err", err)
+			alertText := "Failed to zip directory: " + err.Error()
+			if strings.Contains(err.Error(), "exceeds maximum size") {
+				alertText = fmt.Sprintf("Folder is too large (> %d MB).", maxFileSendSize/(1024*1024))
+			}
+			a.showStatus(ctx, b, chatID, cq.From.ID, alertText)
+			return
+		}
+
+		zipFilename := filepath.Base(targetPath) + ".zip"
+		params := &bot.SendDocumentParams{
+			ChatID: chatID,
+		}
+		sendErr := a.telegramCall(ctx, chatID, func() error {
+			params.Document = &models.InputFileUpload{
+				Filename: zipFilename,
+				Data:     bytes.NewReader(zipData),
+			}
+			_, sErr := b.SendDocument(ctx, params)
 			return sErr
 		})
+		if sendErr != nil {
+			a.Log.Error("failed to send folder zip document", "path", targetPath, "err", sendErr)
+			a.showStatus(ctx, b, chatID, cq.From.ID, "Failed to send zip: "+sendErr.Error())
+		}
 
 	case strings.HasPrefix(data, cbTreeSend):
 		tok := strings.TrimPrefix(data, cbTreeSend)
@@ -569,14 +649,22 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	a.renderDirTree(&sb, cleanPath, "", userID, &lineCount)
 	sb.WriteString("</p>\n")
 
-	// If a folder has been clicked, add Copy button for that folder centered in a one-cell invisible table
-	if selFolder := a.TreeState.GetSelectedFolder(userID); selFolder != "" {
-		sb.WriteString("<table>\n")
-		sb.WriteString("  <tr>\n")
-		sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button></td>\n",
-			html.EscapeString(selFolder), copyButtonLabel(selFolder)))
-		sb.WriteString("  </tr>\n")
-		sb.WriteString("</table>")
+	// If an item (folder or file) has been clicked, add buttons in a centered one-cell invisible table
+	if sel := a.TreeState.GetSelectedItem(userID); sel != "" {
+		if fi, err := os.Stat(sel); err == nil {
+			tok := a.TreeState.GetToken(sel)
+			sb.WriteString("<table>\n")
+			sb.WriteString("  <tr>\n")
+			if fi.IsDir() {
+				sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:zip:%s\">get folder</tg-button></td>\n",
+					html.EscapeString(sel), copyButtonLabel(sel), tok))
+			} else {
+				sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">get file</tg-button></td>\n",
+					html.EscapeString(sel), copyButtonLabel(sel), tok))
+			}
+			sb.WriteString("  </tr>\n")
+			sb.WriteString("</table>")
+		}
 	}
 
 	return sb.String(), nil
@@ -705,4 +793,89 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	sb.WriteString("  </tr>\n")
 	sb.WriteString("</table>")
 	return sb.String()
+}
+
+// createZipArchive creates a zip archive in memory of targetPath up to maxBytes.
+func createZipArchive(targetPath string, maxBytes int64) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	baseDir := filepath.Base(targetPath)
+
+	err := filepath.Walk(targetPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip hidden directories and hidden files (except targetPath itself)
+		if path != targetPath && strings.HasPrefix(info.Name(), ".") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		relPath, err := filepath.Rel(targetPath, path)
+		if err != nil {
+			return err
+		}
+
+		if relPath == "." {
+			return nil
+		}
+
+		if int64(buf.Len()) > maxBytes {
+			return fmt.Errorf("archive exceeds maximum size (%d MB)", maxBytes/(1024*1024))
+		}
+
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+
+		header.Name = filepath.ToSlash(filepath.Join(baseDir, relPath))
+		if info.IsDir() {
+			header.Name += "/"
+		} else {
+			header.Method = zip.Deflate
+		}
+
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			lr := io.LimitReader(file, maxBytes+1)
+			written, copyErr := io.Copy(writer, lr)
+			_ = file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if written > maxBytes || int64(buf.Len()) > maxBytes {
+				return fmt.Errorf("archive exceeds maximum size (%d MB)", maxBytes/(1024*1024))
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	if int64(buf.Len()) > maxBytes {
+		return nil, fmt.Errorf("archive exceeds maximum size (%d MB)", maxBytes/(1024*1024))
+	}
+
+	return buf.Bytes(), nil
 }

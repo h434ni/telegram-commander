@@ -1512,10 +1512,10 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, joined, "inner.txt")
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button>`, tokInner))
 	require.Contains(t, joined, ">subfolder/</tg-button>")
-	require.Contains(t, joined, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'subfolder' path</tg-button></td>`, subDir))
+	require.Contains(t, joined, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'subfolder' path</tg-button> <tg-button type="callback_data" style="primary" data="t:zip:%s">get folder</tg-button></td>`, subDir, tokSub))
 	require.NotContains(t, joined, "🏠 Home")
 
-	// 2b. Click file button: sends a new message with Copy and Send File buttons instead of sending document directly
+	// 2b. Click file button: edits tree message in place to show copy path and get file buttons
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokInner))
 
 	srv.mu.Lock()
@@ -1523,11 +1523,11 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Empty(t, srv.documents, "document should not be sent directly on file click")
 	srv.mu.Unlock()
 
-	fileMsg := msgs[len(msgs)-1]
-	require.Contains(t, fileMsg, "inner.txt")
-	require.Contains(t, fileMsg, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'inner.txt' path</tg-button> <tg-button type="callback_data" style="primary" data="t:send:%s">get file</tg-button></td>`, innerPath, tokInner))
+	lastMsg := msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'inner.txt' path</tg-button> <tg-button type="callback_data" style="primary" data="t:send:%s">get file</tg-button></td>`, innerPath, tokInner))
 
-	// 2c. Click Send File button to send file as document
+	// 2c. Click get file button to send file as document
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:send:"+tokInner))
 
 	srv.mu.Lock()
@@ -1537,7 +1537,16 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Equal(t, "inner.txt", lastDoc["filename"])
 	require.Equal(t, len("inner"), lastDoc["size"])
 
-	// 2d. Test empty file (0 bytes) alert when Send File is clicked
+	// 2d. Click get folder button to send zipped folder as document
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:zip:"+tokSub))
+
+	srv.mu.Lock()
+	lastDoc = srv.documents[len(srv.documents)-1]
+	srv.mu.Unlock()
+	require.Equal(t, "subfolder.zip", lastDoc["filename"])
+	require.Greater(t, lastDoc["size"].(int), 0)
+
+	// 2e. Test empty file (0 bytes) alert when Send File is clicked
 	emptyPath := filepath.Join(subDir, "empty.txt")
 	require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o644))
 	tokEmpty := app.TreeState.GetToken(emptyPath)
@@ -1548,7 +1557,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	srv.mu.Unlock()
 	require.Contains(t, lastAns["text"], "empty")
 
-	// 2e. Test large file (> 20 MB) alert when Send File is clicked
+	// 2f. Test large file (> 20 MB) alert when Send File is clicked
 	largePath := filepath.Join(subDir, "large.bin")
 	fLarge, err := os.Create(largePath)
 	require.NoError(t, err)
@@ -1569,10 +1578,10 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
 
-	lastMsg := msgs[len(msgs)-1]
+	lastMsg = msgs[len(msgs)-1]
 	require.NotContains(t, lastMsg, "inner.txt")
 	require.Contains(t, lastMsg, ">subfolder</tg-button>")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'subfolder' path</tg-button></td>`, subDir))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<td align="center"><tg-button type="copy_text" text="%s">copy 'subfolder' path</tg-button> <tg-button type="callback_data" style="primary" data="t:zip:%s">get folder</tg-button></td>`, subDir, tokSub))
 
 	// 4. Click Close callback
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
