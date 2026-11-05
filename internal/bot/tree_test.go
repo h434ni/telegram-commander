@@ -218,9 +218,25 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	// Children of root last folder shifted 1 space forward: "  └"
 	tokSub := app.TreeState.GetToken(subLast)
 	require.Contains(t, html, `  └<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">sublast/</tg-button><br/>`)
-	// In that content, the nested last folder still has one space before it so it doesn't shift more forward: "   └"
+	// In that content, the nested last folder also shifts forward by 2 spaces: "    └"
 	tokChild := app.TreeState.GetToken(childFile)
-	require.Contains(t, html, `   └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
+	require.Contains(t, html, `    └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
 	// Separator preceded by a new line (<br/>)
 	require.Contains(t, html, "<br/>\n<hr/>\n<p><code>")
+
+	// Also verify a last folder inside a non-last folder (prefix has "│") gets 2 spaces, not 1
+	alphaFolder := filepath.Join(tempDir, "alpha")
+	require.NoError(t, os.Mkdir(alphaFolder, 0o755))
+	alphaLast := filepath.Join(alphaFolder, "alphalast")
+	require.NoError(t, os.Mkdir(alphaLast, 0o755))
+	alphaChild := filepath.Join(alphaLast, "leaf.txt")
+	require.NoError(t, os.WriteFile(alphaChild, []byte("leaf"), 0o644))
+
+	app.TreeState.ToggleExpanded(42, alphaFolder)
+	app.TreeState.ToggleExpanded(42, alphaLast)
+	htmlAlpha, err := app.buildTreeRichMessageHTML(tempDir, 42)
+	require.NoError(t, err)
+	tokLeaf := app.TreeState.GetToken(alphaChild)
+	// Children of alphaLast get "│  └" (2 spaces after │), never just 1 space
+	require.Contains(t, htmlAlpha, `│  └<tg-button type="callback_data" data="t:file:`+tokLeaf+`">leaf.txt</tg-button><br/>`)
 }
