@@ -456,7 +456,6 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
-				Text:            "Zipping " + filepath.Base(targetPath) + "...",
 			})
 			return aErr
 		})
@@ -554,26 +553,19 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return
 		}
 
-		fileData, err := os.ReadFile(targetPath)
-		if err != nil {
-			_ = a.telegramCall(ctx, chatID, func() error {
-				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-					CallbackQueryID: cq.ID,
-					Text:            "Cannot read file: " + err.Error(),
-					ShowAlert:       true,
-				})
-				return aErr
-			})
-			return
-		}
-
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
-				Text:            "Sending " + filepath.Base(targetPath) + "...",
 			})
 			return aErr
 		})
+
+		fileData, err := os.ReadFile(targetPath)
+		if err != nil {
+			a.Log.Error("failed to read file", "path", targetPath, "err", err)
+			a.showStatus(ctx, b, chatID, cq.From.ID, "Cannot read file: "+err.Error())
+			return
+		}
 
 		params := &bot.SendDocumentParams{
 			ChatID: chatID,
