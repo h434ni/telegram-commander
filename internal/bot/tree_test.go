@@ -215,12 +215,12 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	// Parent folder is the root last folder (branch └)
 	tokLast := app.TreeState.GetToken(lastFolder)
 	require.Contains(t, html, `└<tg-button type="callback_data" style="primary" data="t:tog:`+tokLast+`">lastfolder/</tg-button> 👈<br/>`)
-	// Children of root last folder shifted 1 space forward: "  └"
+	// Children of root last folder shifted 1 space forward: "\u00a0\u00a0└"
 	tokSub := app.TreeState.GetToken(subLast)
-	require.Contains(t, html, `  └<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">sublast/</tg-button><br/>`)
-	// In that content, the nested last folder also shifts forward by 2 spaces: "    └"
+	require.Contains(t, html, "\u00a0\u00a0└<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:"+tokSub+"\">sublast/</tg-button><br/>")
+	// In that content, the nested last folder also shifts forward by 2 spaces: "\u00a0\u00a0\u00a0\u00a0└"
 	tokChild := app.TreeState.GetToken(childFile)
-	require.Contains(t, html, `    └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
+	require.Contains(t, html, "\u00a0\u00a0\u00a0\u00a0└<tg-button type=\"callback_data\" data=\"t:file:"+tokChild+"\">child.txt</tg-button><br/>")
 	// Separator preceded by a new line (<br/>)
 	require.Contains(t, html, "<br/>\n<hr/>\n<p><code>")
 
@@ -237,6 +237,6 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	htmlAlpha, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 	tokLeaf := app.TreeState.GetToken(alphaChild)
-	// Children of alphaLast get "│  └" (2 spaces after │), never just 1 space
-	require.Contains(t, htmlAlpha, `│  └<tg-button type="callback_data" data="t:file:`+tokLeaf+`">leaf.txt</tg-button><br/>`)
+	// Children of alphaLast get "│\u00a0\u00a0└" (2 spaces after │), never just 1 space
+	require.Contains(t, htmlAlpha, "│\u00a0\u00a0└<tg-button type=\"callback_data\" data=\"t:file:"+tokLeaf+"\">leaf.txt</tg-button><br/>")
 }

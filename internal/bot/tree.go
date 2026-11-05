@@ -679,7 +679,7 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, userID int64, lineCount *int) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
-		sb.WriteString(prefix + "<i>(cannot read directory)</i><br/>\n")
+		sb.WriteString("\u200b" + prefix + "<i>(cannot read directory)</i><br/>\n")
 		return
 	}
 
@@ -708,13 +708,13 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 	sortEntries(files)
 
 	if len(dirs) == 0 && len(files) == 0 {
-		sb.WriteString(prefix + "<i>(empty)</i><br/>\n")
+		sb.WriteString("\u200b" + prefix + "<i>(empty)</i><br/>\n")
 		return
 	}
 
 	for i, d := range dirs {
 		if *lineCount >= treeMaxLines {
-			sb.WriteString(prefix + "<i>... (more items truncated)</i><br/>\n")
+			sb.WriteString("\u200b" + prefix + "<i>... (more items truncated)</i><br/>\n")
 			return
 		}
 
@@ -723,7 +723,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		nextPrefix := prefix + "│"
 		if isLast {
 			branch = "└"
-			nextPrefix = prefix + "  "
+			nextPrefix = prefix + "\u00a0\u00a0"
 		}
 
 		subPath := filepath.Join(dirPath, d.Name())
@@ -740,7 +740,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			cursor = " 👈"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button>%s<br/>\n",
+		sb.WriteString(fmt.Sprintf("\u200b%s%s<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button>%s<br/>\n",
 			prefix, branch, tok, html.EscapeString(folderName), cursor))
 		(*lineCount)++
 
@@ -751,7 +751,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 
 	for i, f := range files {
 		if *lineCount >= treeMaxLines {
-			sb.WriteString(prefix + "<i>... (more files truncated)</i><br/>\n")
+			sb.WriteString("\u200b" + prefix + "<i>... (more files truncated)</i><br/>\n")
 			return
 		}
 
@@ -768,7 +768,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			cursor = " 👈"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button>%s<br/>\n",
+		sb.WriteString(fmt.Sprintf("\u200b%s%s<tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button>%s<br/>\n",
 			prefix, branch, tok, html.EscapeString(f.Name()), cursor))
 		(*lineCount)++
 	}
