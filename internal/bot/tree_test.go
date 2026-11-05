@@ -195,3 +195,26 @@ func TestBuildTreeRichMessageHTMLEmptyDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, html, "(empty)")
 }
+
+func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
+	tempDir := t.TempDir()
+	lastFolder := filepath.Join(tempDir, "lastfolder")
+	require.NoError(t, os.Mkdir(lastFolder, 0o755))
+	childFile := filepath.Join(lastFolder, "child.txt")
+	require.NoError(t, os.WriteFile(childFile, []byte("content"), 0o644))
+
+	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	app.TreeState.ToggleExpanded(42, lastFolder)
+	app.TreeState.SetSelectedItem(42, lastFolder)
+
+	html, err := app.buildTreeRichMessageHTML(tempDir, 42)
+	require.NoError(t, err)
+	// Parent folder is the last folder (branch └)
+	tokLast := app.TreeState.GetToken(lastFolder)
+	require.Contains(t, html, `└<tg-button type="callback_data" style="primary" data="t:tog:`+tokLast+`">lastfolder/</tg-button> 👈<br/>`)
+	// Children go front by another space: "  └"
+	tokChild := app.TreeState.GetToken(childFile)
+	require.Contains(t, html, `  └<tg-button type="callback_data" data="t:file:`+tokChild+`">child.txt</tg-button><br/>`)
+	// Separator followed by a new line (<br/>)
+	require.Contains(t, html, "<hr/>\n<br/>\n<p><code>")
+}
