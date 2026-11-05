@@ -131,9 +131,6 @@ def main():
     parser.add_argument("--plain", action="store_true", help="Omit HTML tags (for raw terminal text)")
     args = parser.parse_args()
 
-    hostname = socket.gethostname()
-    uptime = get_uptime()
-    load_avg = get_load_average()
     cpu_pct, cores = get_cpu_usage(0.15)
     mem = get_memory_info()
     disk = get_disk_info("/")
@@ -141,9 +138,6 @@ def main():
     if args.plain:
         out = [
             "📊 System Resources",
-            f"🖥️ Host: {hostname}",
-            f"⏱ Uptime: {uptime}",
-            f"📈 Load: {load_avg}",
             "",
             f"🧠 CPU: {cpu_pct:.1f}% ({cores} vCPU)",
             f"[{make_bar(cpu_pct)}]",
@@ -159,7 +153,6 @@ def main():
             f"💽 Disk (/): {format_bytes(disk['used'])} / {format_bytes(disk['total'])} ({disk['pct']:.1f}%)",
             f"[{make_bar(disk['pct'])}] Free: {format_bytes(disk['free'])}",
         ]
-        # Remove empty lines that were conditional
         out = [line for line in out if line != ""]
         print("\n".join(out))
     else:
@@ -172,9 +165,6 @@ def main():
 
         msg = (
             f"📊 <b>System Resources</b>\n\n"
-            f"🖥️ <b>Host:</b> <code>{hostname}</code>\n"
-            f"⏱ <b>Uptime:</b> {uptime}\n"
-            f"📈 <b>Load:</b> {load_avg} (1m, 5m, 15m)\n\n"
             f"🧠 <b>CPU:</b> {cpu_pct:.1f}% ({cores} vCPU)\n"
             f"<code>[{make_bar(cpu_pct)}]</code>\n\n"
             f"💾 <b>RAM:</b> {format_bytes(mem['ram_used'])} / {format_bytes(mem['ram_total'])} ({mem['ram_pct']:.1f}%)\n"
