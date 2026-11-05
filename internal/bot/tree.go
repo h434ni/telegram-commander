@@ -664,15 +664,9 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 			sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 				html.EscapeString(sel), copyButtonLabel(sel)))
 			if fi.IsDir() {
-				base := filepath.Base(sel)
-				if base == "/" || base == "." {
-					base = "root"
-				}
-				zipName := html.EscapeString(base) + ".zip"
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download '%s'</tg-button>\n", tok, zipName))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download folder</tg-button>\n", tok))
 			} else {
-				fileName := html.EscapeString(filepath.Base(sel))
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download '%s'</tg-button>\n", tok, fileName))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
 			}
 			sb.WriteString("</tg-button-row>")
 		}
@@ -827,12 +821,11 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<p>📄 <b>%s</b> (%s)<br/>\n", html.EscapeString(filepath.Base(filePath)), formatFileSize(size)))
 	sb.WriteString("<code>" + html.EscapeString(filePath) + "</code></p>\n")
-	fileName := html.EscapeString(filepath.Base(filePath))
 	sb.WriteString("<hr/>\n")
 	sb.WriteString("<tg-button-row align=\"left\">\n")
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 		html.EscapeString(filePath), copyButtonLabel(filePath)))
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download '%s'</tg-button>\n", tok, fileName))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
 	sb.WriteString("</tg-button-row>")
 	return sb.String()
 }

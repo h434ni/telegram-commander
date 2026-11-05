@@ -125,7 +125,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.Contains(t, html2, "<p><code>~/beta</code></p>")
 	require.Contains(t, html2, `<tg-button-row align="left">`)
 	require.Contains(t, html2, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy full path</tg-button>`)
-	require.Contains(t, html2, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">download 'beta.zip'</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">download folder</tg-button>`)
 
 	// 3. Press parent folder 'beta' again to close it
 	app.TreeState.ToggleExpanded(42, subBeta)
@@ -140,7 +140,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.Contains(t, html3, "<hr/>")
 	require.Contains(t, html3, "<p><code>~/beta</code></p>")
 	require.Contains(t, html3, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy full path</tg-button>`)
-	require.Contains(t, html3, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">download 'beta.zip'</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">download folder</tg-button>`)
 
 	// 4. Select a file in the tree: it mixes copy path and get file buttons directly into the tree message, moving 👈 to the file
 	app.TreeState.SetSelectedItem(42, file1Path)
@@ -151,7 +151,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.Contains(t, htmlFile, "<hr/>")
 	require.Contains(t, htmlFile, "<p><code>~/file1.txt</code></p>")
 	require.Contains(t, htmlFile, `<tg-button type="copy_text" style="success" text="`+file1Path+`">copy full path</tg-button>`)
-	require.Contains(t, htmlFile, `<tg-button type="callback_data" style="success" data="t:send:`+tokFile1+`">download 'file1.txt'</tg-button>`)
+	require.Contains(t, htmlFile, `<tg-button type="callback_data" style="success" data="t:send:`+tokFile1+`">download file</tg-button>`)
 }
 
 func TestCreateZipArchive(t *testing.T) {
@@ -178,7 +178,7 @@ func TestBuildFileRichMessageHTML(t *testing.T) {
 	require.Contains(t, html, "<hr/>")
 	require.Contains(t, html, `<tg-button-row align="left">`)
 	require.Contains(t, html, `<tg-button type="copy_text" style="success" text="/path/to/test.txt">copy full path</tg-button>`)
-	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:send:abc1">download 'test.txt'</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:send:abc1">download file</tg-button>`)
 }
 
 func TestFormatTildePath(t *testing.T) {
