@@ -453,12 +453,17 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return
 		}
 
-		_ = a.telegramCall(ctx, chatID, func() error {
+		ansErr := a.telegramCall(ctx, chatID, func() error {
 			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
 			})
 			return aErr
 		})
+		if ansErr != nil {
+			a.Log.Error("AnswerCallbackQuery error in cbTreeZip", "err", ansErr, "cq_id", cq.ID)
+		} else {
+			a.Log.Info("AnswerCallbackQuery success in cbTreeZip", "cq_id", cq.ID)
+		}
 
 		zipData, err := createZipArchive(targetPath, maxFileSendSize)
 		if err != nil {
@@ -553,12 +558,17 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return
 		}
 
-		_ = a.telegramCall(ctx, chatID, func() error {
+		ansErr := a.telegramCall(ctx, chatID, func() error {
 			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
 			})
 			return aErr
 		})
+		if ansErr != nil {
+			a.Log.Error("AnswerCallbackQuery error in cbTreeSend", "err", ansErr, "cq_id", cq.ID)
+		} else {
+			a.Log.Info("AnswerCallbackQuery success in cbTreeSend", "cq_id", cq.ID)
+		}
 
 		fileData, err := os.ReadFile(targetPath)
 		if err != nil {

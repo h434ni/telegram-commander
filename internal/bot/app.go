@@ -288,6 +288,7 @@ func (a *App) handleCallback(ctx context.Context, b *bot.Bot, update *models.Upd
 	if cq == nil {
 		return
 	}
+	a.Log.Info("handleCallback received", "data", cq.Data, "id", cq.ID)
 	chatID := int64(0)
 	if cq.Message.Message != nil {
 		chatID = cq.Message.Message.Chat.ID
