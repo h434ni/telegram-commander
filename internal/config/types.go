@@ -21,7 +21,7 @@ type Config struct {
 	PageSize          int               `yaml:"page_size"`
 	ConfirmTTL        Duration          `yaml:"confirm_ttl"`
 	EnableRunCommand  bool              `yaml:"enable_run_command"`
-	Output            string            `yaml:"output"` // auto | text | file
+	Output            string            `yaml:"output"` // auto | text | file | raw | html
 	MaxOutputMessages int               `yaml:"max_output_messages"`
 
 	// DeliveryRetryBackoff is the initial wait before retrying a failed Telegram send.
@@ -66,7 +66,7 @@ type ButtonNode struct {
 	WorkDir  string            `yaml:"workdir"`
 	Env      map[string]string `yaml:"env"`
 	Columns  *int              `yaml:"columns"`
-	Output   string            `yaml:"output"` // auto | text | file; empty inherits root
+	Output   string            `yaml:"output"` // auto | text | file | raw | html; empty inherits root
 	Items    []ButtonNode      `yaml:"items"`
 
 	// Params holds extra key/value pairs passed to the function (e.g. command).

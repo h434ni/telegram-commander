@@ -1275,6 +1275,61 @@ func TestButtonOutputTextKeepsChunkedMessages(t *testing.T) {
 	require.Greater(t, preMessages, 1)
 }
 
+func TestButtonOutputRawSendsUnwrappedHTML(t *testing.T) {
+	fake := &executor.FakeExecutor{
+		Fn: func(_ context.Context, _ executor.Spec) (executor.Result, error) {
+			return executor.Result{
+				ExitCode: 0,
+				Stdout:   "📊 <b>System Resources</b>\n🧠 CPU: 5%",
+			}, nil
+		},
+	}
+	srv := &apiServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			API:          ts.URL,
+			BotToken:     "123:ABC",
+			AllowedUsers: []string{"42"},
+		},
+		Menu: []config.ButtonNode{
+			{Name: "Resources", Type: "button", Function: "command", Command: "res", Output: "raw"},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	app := bot.NewApp(cfg, function.NewRegistry(), fake, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, ts.Client()),
+		tgbot.WithServerURL(ts.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "Resources"))
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	require.Empty(t, srv.documents)
+
+	found := false
+	for _, m := range srv.messages {
+		text, _ := m["text"].(string)
+		if strings.Contains(text, "📊 <b>System Resources</b>") {
+			found = true
+			require.NotContains(t, text, "<pre>")
+			require.NotContains(t, text, "Button: Resources")
+			require.NotContains(t, text, "--- stdout ---")
+		}
+	}
+	require.True(t, found, "expected raw HTML message without <pre> or command headers")
+}
+
 func TestDeliveryRetryTransientThenSucceeds(t *testing.T) {
 	srv := &apiServer{failSendN: 2, failSendCode: 500}
 	ts := httptest.NewServer(srv)

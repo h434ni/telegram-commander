@@ -319,7 +319,7 @@ func validateButtons(nodes []ButtonNode, path string) ValidationErrors {
 
 func validOutputMode(mode string) bool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "auto", "text", "file":
+	case "auto", "text", "file", "raw", "html":
 		return true
 	default:
 		return false

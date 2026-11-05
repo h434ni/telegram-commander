@@ -269,7 +269,7 @@ func resultDelivery(mode string, chunkCount, maxMessages int) bool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "file":
 		return true
-	case "text":
+	case "text", "raw", "html":
 		return false
 	default: // auto
 		if maxMessages < 1 {
@@ -277,6 +277,26 @@ func resultDelivery(mode string, chunkCount, maxMessages int) bool {
 		}
 		return chunkCount > maxMessages
 	}
+}
+
+// splitPlainChunks splits plain/HTML text into pieces no larger than limit.
+func splitPlainChunks(s string, limit int) []string {
+	if len(s) <= limit {
+		return []string{s}
+	}
+	var chunks []string
+	for len(s) > limit {
+		idx := strings.LastIndex(s[:limit], "\n")
+		if idx <= 0 {
+			idx = limit
+		}
+		chunks = append(chunks, s[:idx])
+		s = strings.TrimLeft(s[idx:], "\n")
+	}
+	if len(s) > 0 {
+		chunks = append(chunks, s)
+	}
+	return chunks
 }
 
 func resultFileName(buttonName string, when time.Time) string {

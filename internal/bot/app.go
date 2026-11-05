@@ -781,10 +781,6 @@ func (a *App) executeRawCommand(ctx context.Context, b *bot.Bot, chatID int64, u
 }
 
 func (a *App) deliverResult(ctx context.Context, b *bot.Bot, chatID, userID int64, node *Node, res executor.Result, err error) {
-	chunks := formatCommandResult(node, res, err)
-	if len(chunks) == 0 {
-		chunks = []string{buildResultHeader(node, res, err)}
-	}
 	st := a.getNav(userID)
 	view, viewErr := a.Index.BuildMenu(st.nodeID, st.page)
 	if viewErr != nil {
@@ -798,9 +794,24 @@ func (a *App) deliverResult(ctx context.Context, b *bot.Bot, chatID, userID int6
 	if mode == "" {
 		mode = a.Cfg.Output
 	}
-	if resultDelivery(mode, len(chunks), a.Cfg.MaxOutputMessages) {
-		if a.sendResultDocument(ctx, b, chatID, node, res, err, view) {
-			return
+
+	var chunks []string
+	isRaw := strings.EqualFold(mode, "raw") || strings.EqualFold(mode, "html")
+	if isRaw && err == nil && res.ExitCode == 0 && !res.TimedOut {
+		stdout := strings.TrimRight(res.Stdout, "\n")
+		if stdout == "" {
+			stdout = "<i>(empty output)</i>"
+		}
+		chunks = splitPlainChunks(stdout, telegramMaxMessageLen)
+	} else {
+		chunks = formatCommandResult(node, res, err)
+		if len(chunks) == 0 {
+			chunks = []string{buildResultHeader(node, res, err)}
+		}
+		if resultDelivery(mode, len(chunks), a.Cfg.MaxOutputMessages) {
+			if a.sendResultDocument(ctx, b, chatID, node, res, err, view) {
+				return
+			}
 		}
 	}
 
@@ -823,7 +834,15 @@ func (a *App) deliverResult(ctx context.Context, b *bot.Bot, chatID, userID int6
 			msg, err = b.SendMessage(ctx, params)
 			return err
 		})
-		if sendErr != nil || msg == nil {
+		if sendErr != nil && isRaw {
+			params.ParseMode = ""
+			_ = a.telegramCall(ctx, chatID, func() error {
+				var err error
+				msg, err = b.SendMessage(ctx, params)
+				return err
+			})
+		}
+		if msg == nil {
 			a.Log.Error("send result", "err", sendErr)
 			break
 		}
