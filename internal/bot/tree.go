@@ -683,6 +683,8 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		return
 	}
 
+	selectedItem := a.TreeState.GetSelectedItem(userID)
+
 	var dirs []os.DirEntry
 	var files []os.DirEntry
 	for _, e := range entries {
@@ -733,8 +735,13 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			folderName += "/"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button><br/>\n",
-			prefix, branch, tok, html.EscapeString(folderName)))
+		cursor := ""
+		if subPath == selectedItem {
+			cursor = " 👈"
+		}
+
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button>%s<br/>\n",
+			prefix, branch, tok, html.EscapeString(folderName), cursor))
 		(*lineCount)++
 
 		if isOpen {
@@ -756,8 +763,13 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		filePath := filepath.Join(dirPath, f.Name())
 		tok := a.TreeState.GetToken(filePath)
 
-		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button><br/>\n",
-			prefix, branch, tok, html.EscapeString(f.Name())))
+		cursor := ""
+		if filePath == selectedItem {
+			cursor = " 👈"
+		}
+
+		sb.WriteString(fmt.Sprintf("%s%s<tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button>%s<br/>\n",
+			prefix, branch, tok, html.EscapeString(f.Name()), cursor))
 		(*lineCount)++
 	}
 }

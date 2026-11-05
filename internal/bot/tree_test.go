@@ -113,11 +113,11 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	html2, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
-	// Button stays blue (primary) but has a trailing slash when open
-	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button>`)
-	// Nested directory appears closed (blue)
+	// Button stays blue (primary) but has a trailing slash and 👈 when selected/open
+	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button> 👈<br/>`)
+	// Nested directory appears closed (blue) and not selected
 	tokNested := app.TreeState.GetToken(nestedDir)
-	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button><br/>`)
 	// Bottom control row now contains Copy and get folder buttons for beta in tg-button-row preceded by separator hr
 	require.NotContains(t, html2, "<table>")
 	require.Contains(t, html2, "<hr/>")
@@ -130,8 +130,8 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	html3, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
 
-	// Button collapses back to primary (blue) without trailing slash
-	require.Contains(t, html3, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button>`)
+	// Button collapses back to primary (blue) without trailing slash, still with 👈 as last clicked
+	require.Contains(t, html3, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button> 👈<br/>`)
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
 	// Copy and get folder buttons remain for last-clicked folder
@@ -139,10 +139,12 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.Contains(t, html3, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy 'beta'</tg-button>`)
 	require.Contains(t, html3, `<tg-button type="callback_data" style="success" data="t:zip:`+tokBeta+`">get 'beta.zip'</tg-button>`)
 
-	// 4. Select a file in the tree: it mixes copy path and get file buttons directly into the tree message
+	// 4. Select a file in the tree: it mixes copy path and get file buttons directly into the tree message, moving 👈 to the file
 	app.TreeState.SetSelectedItem(42, file1Path)
 	htmlFile, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
+	require.Contains(t, htmlFile, `<tg-button type="callback_data" data="t:file:`+tokFile1+`">file1.txt</tg-button> 👈<br/>`)
+	require.NotContains(t, htmlFile, `>beta</tg-button> 👈`)
 	require.Contains(t, htmlFile, "<hr/>")
 	require.Contains(t, htmlFile, `<tg-button type="copy_text" style="success" text="`+file1Path+`">copy 'file1.txt'</tg-button>`)
 	require.Contains(t, htmlFile, `<tg-button type="callback_data" style="success" data="t:send:`+tokFile1+`">get 'file1.txt'</tg-button>`)
