@@ -562,20 +562,21 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	}
 
 	var sb strings.Builder
-	sb.WriteString("<p>🌳 <b>Folder Explorer</b><br/>\n")
-	sb.WriteString("📂 <code>" + html.EscapeString(cleanPath) + "</code></p>\n")
+	sb.WriteString("<p>🌳 <b>Folder Explorer</b></p>\n")
 
 	sb.WriteString("<p>\n")
 	lineCount := 0
 	a.renderDirTree(&sb, cleanPath, "", userID, &lineCount)
 	sb.WriteString("</p>\n")
 
-	// If a folder has been clicked, add Copy button for that folder
+	// If a folder has been clicked, add Copy button for that folder centered in a one-cell invisible table
 	if selFolder := a.TreeState.GetSelectedFolder(userID); selFolder != "" {
-		sb.WriteString("<tg-button-row align=\"left\">\n")
-		sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">%s</tg-button>\n",
-			html.EscapeString(selFolder), html.EscapeString(copyFolderButtonLabel(selFolder))))
-		sb.WriteString("</tg-button-row>")
+		sb.WriteString("<table>\n")
+		sb.WriteString("  <tr>\n")
+		sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button></td>\n",
+			html.EscapeString(selFolder), copyButtonLabel(selFolder)))
+		sb.WriteString("  </tr>\n")
+		sb.WriteString("</table>")
 	}
 
 	return sb.String(), nil
@@ -687,17 +688,9 @@ func formatFileSize(bytes int64) string {
 	}
 }
 
-func copyFolderButtonLabel(path string) string {
+func copyButtonLabel(path string) string {
 	base := filepath.Base(path)
-	if base == "/" || base == "." {
-		return "copy / path"
-	}
-	return fmt.Sprintf("copy %s/ path", base)
-}
-
-func copyFileButtonLabel(path string) string {
-	base := filepath.Base(path)
-	return fmt.Sprintf("copy %s path", base)
+	return fmt.Sprintf("copy '%s' path", html.EscapeString(base))
 }
 
 // buildFileRichMessageHTML formats the message sent when a file is selected.
@@ -705,10 +698,11 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<p>📄 <b>%s</b> (%s)<br/>\n", html.EscapeString(filepath.Base(filePath)), formatFileSize(size)))
 	sb.WriteString("<code>" + html.EscapeString(filePath) + "</code></p>\n")
-	sb.WriteString("<tg-button-row align=\"left\">\n")
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" text=\"%s\">%s</tg-button>\n",
-		html.EscapeString(filePath), html.EscapeString(copyFileButtonLabel(filePath))))
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">get file</tg-button>\n", tok))
-	sb.WriteString("</tg-button-row>")
+	sb.WriteString("<table>\n")
+	sb.WriteString("  <tr>\n")
+	sb.WriteString(fmt.Sprintf("    <td align=\"center\"><tg-button type=\"copy_text\" text=\"%s\">%s</tg-button> <tg-button type=\"callback_data\" style=\"primary\" data=\"t:send:%s\">get file</tg-button></td>\n",
+		html.EscapeString(filePath), copyButtonLabel(filePath), tok))
+	sb.WriteString("  </tr>\n")
+	sb.WriteString("</table>")
 	return sb.String()
 }
