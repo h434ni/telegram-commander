@@ -1513,8 +1513,9 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button>`, tokInner))
 	require.Contains(t, joined, ">subfolder/</tg-button> 👈<br/>")
 	require.Contains(t, joined, "<hr/>")
-	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy 'subfolder'</tg-button>`, subDir))
-	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">get 'subfolder.zip'</tg-button>`, tokSub))
+	require.Contains(t, joined, "<p><code>~/subfolder</code></p>")
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, subDir))
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">download 'subfolder.zip'</tg-button>`, tokSub))
 	require.NotContains(t, joined, "🏠 Home")
 
 	// 2b. Click file button: edits tree message in place to show copy path and get file buttons
@@ -1530,8 +1531,9 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button> 👈<br/>`, tokInner))
 	require.NotContains(t, lastMsg, ">subfolder/</tg-button> 👈")
 	require.Contains(t, lastMsg, "<hr/>")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy 'inner.txt'</tg-button>`, innerPath))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:send:%s">get 'inner.txt'</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, "<p><code>~/subfolder/inner.txt</code></p>")
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, innerPath))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:send:%s">download 'inner.txt'</tg-button>`, tokInner))
 
 	// 2c. Click get file button to send file as document
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:send:"+tokInner))
@@ -1589,8 +1591,9 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, ">subfolder</tg-button> 👈<br/>")
 	require.NotContains(t, lastMsg, "inner.txt</tg-button> 👈")
 	require.Contains(t, lastMsg, "<hr/>")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy 'subfolder'</tg-button>`, subDir))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">get 'subfolder.zip'</tg-button>`, tokSub))
+	require.Contains(t, lastMsg, "<p><code>~/subfolder</code></p>")
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, subDir))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">download 'subfolder.zip'</tg-button>`, tokSub))
 
 	// 4. Click Close callback
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))

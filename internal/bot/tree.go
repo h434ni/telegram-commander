@@ -654,6 +654,12 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 		if fi, err := os.Stat(sel); err == nil {
 			tok := a.TreeState.GetToken(sel)
 			sb.WriteString("<hr/>\n")
+			home := ""
+			if a.TreeState != nil {
+				home = a.TreeState.Home()
+			}
+			tildePath := formatTildePath(sel, home, cleanPath)
+			sb.WriteString("<p><code>" + html.EscapeString(tildePath) + "</code></p>\n")
 			sb.WriteString("<tg-button-row align=\"left\">\n")
 			sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 				html.EscapeString(sel), copyButtonLabel(sel)))
@@ -663,10 +669,10 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 					base = "root"
 				}
 				zipName := html.EscapeString(base) + ".zip"
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">get '%s'</tg-button>\n", tok, zipName))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download '%s'</tg-button>\n", tok, zipName))
 			} else {
 				fileName := html.EscapeString(filepath.Base(sel))
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">get '%s'</tg-button>\n", tok, fileName))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download '%s'</tg-button>\n", tok, fileName))
 			}
 			sb.WriteString("</tg-button-row>")
 		}
@@ -719,11 +725,11 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 		}
 
 		isLast := (i == len(dirs)-1 && len(files) == 0)
-		branch := "├── "
-		nextPrefix := prefix + "│   "
+		branch := "├"
+		nextPrefix := prefix + "│"
 		if isLast {
-			branch = "└── "
-			nextPrefix = prefix + "    "
+			branch = "└"
+			nextPrefix = prefix + " "
 		}
 
 		subPath := filepath.Join(dirPath, d.Name())
@@ -755,9 +761,9 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 			return
 		}
 
-		branch := "├── "
+		branch := "├"
 		if i == len(files)-1 {
-			branch = "└── "
+			branch = "└"
 		}
 
 		filePath := filepath.Join(dirPath, f.Name())
@@ -793,12 +799,27 @@ func formatFileSize(bytes int64) string {
 	}
 }
 
-func copyButtonLabel(path string) string {
-	base := filepath.Base(path)
-	if base == "/" || base == "." {
-		base = "root"
+// formatTildePath formats a path starting with ~/ if it resides in home or root.
+func formatTildePath(path, home, root string) string {
+	cleanPath := filepath.Clean(path)
+	for _, base := range []string{home, root} {
+		if base == "" {
+			continue
+		}
+		cleanBase := filepath.Clean(base)
+		if cleanPath == cleanBase {
+			return "~/"
+		}
+		if strings.HasPrefix(cleanPath, cleanBase+string(filepath.Separator)) {
+			rel := strings.TrimPrefix(cleanPath, cleanBase+string(filepath.Separator))
+			return "~/" + filepath.ToSlash(rel)
+		}
 	}
-	return fmt.Sprintf("copy '%s'", html.EscapeString(base))
+	return filepath.ToSlash(cleanPath)
+}
+
+func copyButtonLabel(path string) string {
+	return "copy full path"
 }
 
 // buildFileRichMessageHTML formats the message sent when a file is selected.
@@ -811,7 +832,7 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	sb.WriteString("<tg-button-row align=\"left\">\n")
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 		html.EscapeString(filePath), copyButtonLabel(filePath)))
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">get '%s'</tg-button>\n", tok, fileName))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download '%s'</tg-button>\n", tok, fileName))
 	sb.WriteString("</tg-button-row>")
 	return sb.String()
 }
