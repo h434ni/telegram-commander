@@ -1500,7 +1500,7 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 		tokNew := a.TreeState.GetToken(newTargetPath)
 		oldName := filepath.Base(aw.TargetPath)
 		richHTML := fmt.Sprintf(
-			"<p>✅ File content replaced.</p>\n<p>Rename the file too?</p>\n<p>Old: <code>%s</code> 👇<br/>New: <code>%s</code></p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" style=\"success\" data=\"%s%s:%s\">✅ Yes</tg-button>\n  <tg-button type=\"callback_data\" style=\"danger\" data=\"%s%s\">❌ No</tg-button>\n</tg-button-row>",
+			"<p>✅ File content replaced.</p>\n<p>Rename the file too?</p>\n<p><code>Old: </code><code>%s</code> 👇<br/><code>New: </code><code>%s</code></p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" style=\"success\" data=\"%s%s:%s\">✅ Yes</tg-button>\n  <tg-button type=\"callback_data\" style=\"danger\" data=\"%s%s\">❌ No</tg-button>\n</tg-button-row>",
 			html.EscapeString(oldName),
 			html.EscapeString(uploadedName),
 			cbTreeRfeY, tokOld, tokNew,

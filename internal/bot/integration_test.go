@@ -1750,8 +1750,8 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "✅ File content replaced.")
 	require.Contains(t, lastMsg, "Rename the file too?")
-	require.Contains(t, lastMsg, fmt.Sprintf("Old: <code>%s</code> 👇", html.EscapeString(filepath.Base(docPath))))
-	require.Contains(t, lastMsg, "New: <code>uploaded.txt</code>")
+	require.Contains(t, lastMsg, fmt.Sprintf("<code>Old: </code><code>%s</code> 👇", html.EscapeString(filepath.Base(docPath))))
+	require.Contains(t, lastMsg, "<code>New: </code><code>uploaded.txt</code>")
 	require.Contains(t, lastMsg, "t:rfe:y:")
 	require.Contains(t, lastMsg, "t:rfe:n:")
 
