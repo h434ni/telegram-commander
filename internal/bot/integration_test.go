@@ -1749,9 +1749,13 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	srv.mu.Unlock()
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "✅ File content replaced.")
-	require.Contains(t, lastMsg, "Rename the file too?")
+	require.Contains(t, lastMsg, "\n\n<p>Rename the file too?</p>")
 	require.Contains(t, lastMsg, fmt.Sprintf("<code>Old: </code><code>%s</code> 👇", html.EscapeString(filepath.Base(docPath))))
 	require.Contains(t, lastMsg, "<code>New: </code><code>uploaded.txt</code>")
+	require.Contains(t, lastMsg, ">Yes</tg-button>")
+	require.Contains(t, lastMsg, ">No</tg-button>")
+	require.NotContains(t, lastMsg, "✅ Yes")
+	require.NotContains(t, lastMsg, "❌ No")
 	require.Contains(t, lastMsg, "t:rfe:y:")
 	require.Contains(t, lastMsg, "t:rfe:n:")
 
