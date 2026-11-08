@@ -1498,9 +1498,10 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 		newTargetPath := filepath.Join(targetDir, uploadedName)
 		tokOld := a.TreeState.GetToken(aw.TargetPath)
 		tokNew := a.TreeState.GetToken(newTargetPath)
+		oldName := filepath.Base(aw.TargetPath)
 		richHTML := fmt.Sprintf(
-			"<p>File content replaced from <code>%s</code>.</p>\n<p>Do you wish to rename the file to <code>%s</code> as well?</p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" style=\"success\" data=\"%s%s:%s\">✅ Yes</tg-button>\n  <tg-button type=\"callback_data\" style=\"danger\" data=\"%s%s\">❌ No</tg-button>\n</tg-button-row>",
-			html.EscapeString(uploadedName),
+			"<p>✅ File content replaced.</p>\n<p>Rename the file too?</p>\n<p>Old: <code>%s</code> 👇<br/>New: <code>%s</code></p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" style=\"success\" data=\"%s%s:%s\">✅ Yes</tg-button>\n  <tg-button type=\"callback_data\" style=\"danger\" data=\"%s%s\">❌ No</tg-button>\n</tg-button-row>",
+			html.EscapeString(oldName),
 			html.EscapeString(uploadedName),
 			cbTreeRfeY, tokOld, tokNew,
 			cbTreeRfeN, tokOld,

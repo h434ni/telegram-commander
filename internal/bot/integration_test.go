@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1747,7 +1748,10 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
 	lastMsg = msgs[len(msgs)-1]
-	require.Contains(t, lastMsg, "Do you wish to rename the file to <code>uploaded.txt</code> as well?")
+	require.Contains(t, lastMsg, "✅ File content replaced.")
+	require.Contains(t, lastMsg, "Rename the file too?")
+	require.Contains(t, lastMsg, fmt.Sprintf("Old: <code>%s</code> 👇", html.EscapeString(filepath.Base(docPath))))
+	require.Contains(t, lastMsg, "New: <code>uploaded.txt</code>")
 	require.Contains(t, lastMsg, "t:rfe:y:")
 	require.Contains(t, lastMsg, "t:rfe:n:")
 
