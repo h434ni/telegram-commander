@@ -39,6 +39,8 @@ type apiServer struct {
 	failSendCode   int
 	failRetryAfter int
 	sendAttempts   int
+
+	failEditMessageWithUneditable bool
 }
 
 func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +111,12 @@ func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		writeOK(w, true)
 	case strings.HasSuffix(path, "/editMessageText"):
+		if s.failEditMessageWithUneditable {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: message can't be edited"}`))
+			return
+		}
 		text := r.FormValue("text")
 		if text == "" && r.FormValue("rich_message") != "" {
 			var rm struct {
@@ -1700,9 +1708,9 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
-	lastTreeMsg := srv.messages[len(srv.messages)-1]
-	require.NotEmpty(t, lastTreeMsg["reply_markup"])
-	require.Contains(t, fmt.Sprintf("%v", lastTreeMsg["reply_markup"]), "tg-tree")
+	notifMsg := srv.messages[len(srv.messages)-2]
+	require.NotEmpty(t, notifMsg["reply_markup"])
+	require.Contains(t, fmt.Sprintf("%v", notifMsg["reply_markup"]), "tg-tree")
 	srv.mu.Unlock()
 	require.Contains(t, msgs[len(msgs)-2], "content updated successfully")
 	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
@@ -1806,9 +1814,9 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
-	lastTreeMsg = srv.messages[len(srv.messages)-1]
-	require.NotEmpty(t, lastTreeMsg["reply_markup"])
-	require.Contains(t, fmt.Sprintf("%v", lastTreeMsg["reply_markup"]), "tg-tree")
+	notifMsg = srv.messages[len(srv.messages)-2]
+	require.NotEmpty(t, notifMsg["reply_markup"])
+	require.Contains(t, fmt.Sprintf("%v", notifMsg["reply_markup"]), "tg-tree")
 	srv.mu.Unlock()
 	require.Contains(t, msgs[len(msgs)-2], "File renamed to <code>final.md</code>")
 	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
@@ -2013,4 +2021,76 @@ func TestTreeEditAndRename_FolderOpenPreserved(t *testing.T) {
 	require.Contains(t, updatedTreeAfterRename, "renamed.txt")
 	tokRenamed := app.TreeState.GetToken(renamedPath)
 	require.Contains(t, updatedTreeAfterRename, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">renamed.txt</tg-button> 👈<br/>`, tokRenamed))
+}
+
+func TestTreeEditMessageText_FallbackWhenUneditable(t *testing.T) {
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "folder")
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	filePath := filepath.Join(subDir, "hello.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("hello"), 0o644))
+
+	srv := &apiServer{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	cfg := &config.Config{
+		WorkDir: tempDir,
+		Telegram: config.TelegramConfig{
+			BotToken:     "TEST:TOKEN",
+			API:          server.URL,
+			AllowedUsers: []string{"42", "admin"},
+		},
+		Menu: []config.ButtonNode{
+			{Name: "tg-tree", Type: "button", Function: "tg-tree", Path: tempDir},
+		},
+	}
+	cfg.ApplyDefaults()
+	app := bot.NewApp(cfg, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, server.Client()),
+		tgbot.WithServerURL(server.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 1. Open tree
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "🌳 tg-tree"))
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	require.NotEmpty(t, msgs)
+
+	tokFolder := app.TreeState.GetToken(subDir)
+	tokFile := app.TreeState.GetToken(filePath)
+
+	// Expand folder
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokFolder))
+
+	// Now simulate that Telegram returns "Bad Request: message can't be edited" for the current message.
+	srv.mu.Lock()
+	srv.failEditMessageWithUneditable = true
+	deletesBefore := srv.deletes
+	messagesBefore := len(srv.messages)
+	srv.mu.Unlock()
+
+	// 2. Click file to select it.
+	// Because editMessageText fails with "message can't be edited",
+	// the fallback should delete the old uneditable message and send a fresh tree message.
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokFile))
+
+	srv.mu.Lock()
+	deletesAfter := srv.deletes
+	messagesAfter := len(srv.messages)
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+
+	require.Greater(t, deletesAfter, deletesBefore, "stale uneditable message should be deleted")
+	require.Greater(t, messagesAfter, messagesBefore, "new tree message should be sent")
+	lastMsg := msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "hello.txt")
+	require.Contains(t, lastMsg, "file operations:")
 }

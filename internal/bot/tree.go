@@ -326,7 +326,6 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
-			ReplyMarkup: a.currentReplyMarkup(user.ID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(user.ID, msg.ID)
@@ -814,6 +813,20 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 							HTML: fmt.Sprintf("<p>File renamed to <code>%s</code>.</p>", html.EscapeString(filepath.Base(newPath))),
 						},
 					})
+					if editErr != nil && strings.Contains(editErr.Error(), "message can't be edited") {
+						_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+							ChatID:    chatID,
+							MessageID: msgID,
+						})
+						_, _ = b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+							ChatID: chatID,
+							RichMessage: models.InputRichMessage{
+								HTML: fmt.Sprintf("<p>File renamed to <code>%s</code>.</p>", html.EscapeString(filepath.Base(newPath))),
+							},
+							ReplyMarkup: a.currentReplyMarkup(cq.From.ID),
+						})
+						return nil
+					}
 					return editErr
 				})
 				_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
@@ -842,6 +855,20 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 					HTML: fmt.Sprintf("<p>Kept original name <code>%s</code>.</p>", html.EscapeString(name)),
 				},
 			})
+			if editErr != nil && strings.Contains(editErr.Error(), "message can't be edited") {
+				_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+					ChatID:    chatID,
+					MessageID: msgID,
+				})
+				_, _ = b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+					ChatID: chatID,
+					RichMessage: models.InputRichMessage{
+						HTML: fmt.Sprintf("<p>Kept original name <code>%s</code>.</p>", html.EscapeString(name)),
+					},
+					ReplyMarkup: a.currentReplyMarkup(cq.From.ID),
+				})
+				return nil
+			}
 			return editErr
 		})
 		_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
@@ -883,6 +910,20 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 							HTML: fmt.Sprintf("<p>Format deleted. File renamed to <code>%s</code> (without format).</p>", html.EscapeString(filepath.Base(withoutExt))),
 						},
 					})
+					if editErr != nil && strings.Contains(editErr.Error(), "message can't be edited") {
+						_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+							ChatID:    chatID,
+							MessageID: msgID,
+						})
+						_, _ = b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+							ChatID: chatID,
+							RichMessage: models.InputRichMessage{
+								HTML: fmt.Sprintf("<p>Format deleted. File renamed to <code>%s</code> (without format).</p>", html.EscapeString(filepath.Base(withoutExt))),
+							},
+							ReplyMarkup: a.currentReplyMarkup(cq.From.ID),
+						})
+						return nil
+					}
 					return editErr
 				})
 				_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
@@ -911,6 +952,20 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 					HTML: fmt.Sprintf("<p>Kept format for <code>%s</code>.</p>", html.EscapeString(name)),
 				},
 			})
+			if editErr != nil && strings.Contains(editErr.Error(), "message can't be edited") {
+				_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+					ChatID:    chatID,
+					MessageID: msgID,
+				})
+				_, _ = b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+					ChatID: chatID,
+					RichMessage: models.InputRichMessage{
+						HTML: fmt.Sprintf("<p>Kept format for <code>%s</code>.</p>", html.EscapeString(name)),
+					},
+					ReplyMarkup: a.currentReplyMarkup(cq.From.ID),
+				})
+				return nil
+			}
 			return editErr
 		})
 		_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
@@ -922,10 +977,12 @@ func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, mes
 	curPath := a.TreeState.GetUserPath(userID)
 	richHTML, err := a.buildTreeRichMessageHTML(curPath, userID)
 	if err != nil {
+		a.Log.Error("failed to build tree html", "err", err, "path", curPath)
 		return err
 	}
-	return a.telegramCall(ctx, chatID, func() error {
-		_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+	var editErr error
+	callErr := a.telegramCall(ctx, chatID, func() error {
+		_, editErr = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
 			MessageID: messageID,
 			RichMessage: &models.InputRichMessage{
@@ -937,6 +994,27 @@ func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, mes
 		}
 		return editErr
 	})
+	if callErr == nil {
+		return nil
+	}
+
+	a.Log.Warn("editTreeMessage EditMessageText failed", "err", callErr, "chatID", chatID, "messageID", messageID)
+
+	// Fallback: If Telegram refuses to edit the message (e.g. message can't be edited because it had reply_markup,
+	// or message was deleted / not found), delete the stale message if possible and send a fresh editable tree message.
+	if strings.Contains(callErr.Error(), "message can't be edited") ||
+		strings.Contains(callErr.Error(), "message to edit not found") {
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, dErr := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+				ChatID:    chatID,
+				MessageID: messageID,
+			})
+			return dErr
+		})
+		return a.sendUpdatedTreeMessage(ctx, b, chatID, userID)
+	}
+
+	return callErr
 }
 
 // sendUpdatedTreeMessage sends a fresh tree message reflecting current explorer state.
@@ -955,7 +1033,6 @@ func (a *App) sendUpdatedTreeMessage(ctx context.Context, b *bot.Bot, chatID, us
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
-			ReplyMarkup: a.currentReplyMarkup(userID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(userID, msg.ID)
@@ -977,6 +1054,20 @@ func (a *App) closeTreeExplorer(ctx context.Context, b *bot.Bot, chatID, userID 
 					HTML: fmt.Sprintf("<p>🌳 <b>Folder Explorer</b> (closed)<br/><i>Last path:</i> <code>%s</code></p>", html.EscapeString(cur)),
 				},
 			})
+			if err != nil && strings.Contains(err.Error(), "message can't be edited") {
+				_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+					ChatID:    chatID,
+					MessageID: treeMsgID,
+				})
+				_, _ = b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+					ChatID: chatID,
+					RichMessage: models.InputRichMessage{
+						HTML: fmt.Sprintf("<p>🌳 <b>Folder Explorer</b> (closed)<br/><i>Last path:</i> <code>%s</code></p>", html.EscapeString(cur)),
+					},
+					ReplyMarkup: a.currentReplyMarkup(userID),
+				})
+				return nil
+			}
 			return err
 		})
 		a.TreeState.ClearUserMessage(userID)
@@ -1420,7 +1511,6 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 				RichMessage: models.InputRichMessage{
 					HTML: richHTML,
 				},
-				ReplyMarkup: a.currentReplyMarkup(userID),
 			})
 			return sErr
 		})
@@ -1530,7 +1620,6 @@ func (a *App) handleTreeRenameInput(ctx context.Context, b *bot.Bot, chatID, use
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
-			ReplyMarkup: a.currentReplyMarkup(userID),
 		})
 		return sErr
 	})
