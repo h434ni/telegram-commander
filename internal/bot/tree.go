@@ -823,6 +823,7 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 					})
 					return editErr
 				})
+				_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
 			}
 		}
 
@@ -850,6 +851,7 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			})
 			return editErr
 		})
+		_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
 
 	case strings.HasPrefix(data, cbTreeRfdY):
 		parts := strings.Split(strings.TrimPrefix(data, cbTreeRfdY), ":")
@@ -890,6 +892,7 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 					})
 					return editErr
 				})
+				_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
 			}
 		}
 
@@ -917,6 +920,7 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			})
 			return editErr
 		})
+		_ = a.sendUpdatedTreeMessage(ctx, b, chatID, cq.From.ID)
 	}
 }
 
@@ -939,6 +943,30 @@ func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, mes
 			return nil
 		}
 		return editErr
+	})
+}
+
+// sendUpdatedTreeMessage sends a fresh tree message reflecting current explorer state.
+func (a *App) sendUpdatedTreeMessage(ctx context.Context, b *bot.Bot, chatID, userID int64) error {
+	curPath := a.TreeState.GetUserPath(userID)
+	if curPath == "" {
+		curPath = a.TreeState.Home()
+	}
+	richHTML, err := a.buildTreeRichMessageHTML(curPath, userID)
+	if err != nil {
+		return err
+	}
+	return a.telegramCall(ctx, chatID, func() error {
+		msg, sendErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+			ChatID: chatID,
+			RichMessage: models.InputRichMessage{
+				HTML: richHTML,
+			},
+		})
+		if sendErr == nil && msg != nil {
+			a.TreeState.SetUserMessage(userID, msg.ID)
+		}
+		return sendErr
 	})
 }
 
@@ -992,12 +1020,17 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 				html.EscapeString(sel), copyButtonLabel(sel)))
 			if fi.IsDir() {
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download folder</tg-button>\n", tok))
+				sb.WriteString("</tg-button-row>")
 			} else {
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit file</tg-button>\n", tok))
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename file</tg-button>\n", tok))
+				sb.WriteString("</tg-button-row>\n")
+				sb.WriteString("<hr/>\n")
+				sb.WriteString("<p>file operations:</p>\n")
+				sb.WriteString("<tg-button-row align=\"left\">\n")
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename</tg-button>\n", tok))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit</tg-button>\n", tok))
+				sb.WriteString("</tg-button-row>")
 			}
-			sb.WriteString("</tg-button-row>")
 		}
 	}
 
@@ -1155,8 +1188,12 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 		html.EscapeString(filePath), copyButtonLabel(filePath)))
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit file</tg-button>\n", tok))
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename file</tg-button>\n", tok))
+	sb.WriteString("</tg-button-row>\n")
+	sb.WriteString("<hr/>\n")
+	sb.WriteString("<p>file operations:</p>\n")
+	sb.WriteString("<tg-button-row align=\"left\">\n")
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename</tg-button>\n", tok))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit</tg-button>\n", tok))
 	sb.WriteString("</tg-button-row>")
 	return sb.String()
 }
@@ -1365,6 +1402,20 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 			_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, userID)
 		}
 
+		if uploadedName == filepath.Base(aw.TargetPath) {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+					ChatID: chatID,
+					RichMessage: models.InputRichMessage{
+						HTML: fmt.Sprintf("<p>File <code>%s</code> content updated successfully.</p>", html.EscapeString(uploadedName)),
+					},
+				})
+				return sErr
+			})
+			_ = a.sendUpdatedTreeMessage(ctx, b, chatID, userID)
+			return
+		}
+
 		// "If the user response was a file, ask user if they wish to rename the file aswell."
 		targetDir := filepath.Dir(aw.TargetPath)
 		newTargetPath := filepath.Join(targetDir, uploadedName)
@@ -1408,6 +1459,7 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 			})
 			return sErr
 		})
+		_ = a.sendUpdatedTreeMessage(ctx, b, chatID, userID)
 		return
 	}
 
@@ -1451,6 +1503,7 @@ func (a *App) handleTreeRenameInput(ctx context.Context, b *bot.Bot, chatID, use
 			})
 			return sErr
 		})
+		_ = a.sendUpdatedTreeMessage(ctx, b, chatID, userID)
 		return
 	}
 

@@ -1561,8 +1561,9 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, "<p><code>~/subfolder/inner.txt</code></p>")
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, innerPath))
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:send:%s">download file</tg-button>`, tokInner))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:edit:%s">edit file</tg-button>`, tokInner))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:ren:%s">rename file</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, "<p>file operations:</p>")
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:ren:%s">rename</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:edit:%s">edit</tg-button>`, tokInner))
 
 	// 2c. Click get file button to send file as document
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:send:"+tokInner))
@@ -1705,7 +1706,9 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
-	require.Contains(t, msgs[len(msgs)-1], "content updated successfully")
+	require.Contains(t, msgs[len(msgs)-2], "content updated successfully")
+	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
+	require.Contains(t, msgs[len(msgs)-1], "doc.txt")
 
 	// 4. Click Edit File again and reply with wrong format (.png vs .txt)
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokDoc))
@@ -1750,6 +1753,12 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	require.FileExists(t, uploadedPath)
 	require.NoFileExists(t, docPath)
 
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
+	require.Contains(t, msgs[len(msgs)-1], "uploaded.txt")
+
 	// 6. Rename uploaded.txt without format ("newname")
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokUploaded))
 	srv.mu.Lock()
@@ -1779,6 +1788,12 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	require.FileExists(t, newnameNoExt)
 	require.NoFileExists(t, newnameWithExt)
 
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
+	require.Contains(t, msgs[len(msgs)-1], "newname")
+
 	// 7. Rename newname with format ("final.md")
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokNoExt))
 	srv.mu.Lock()
@@ -1789,6 +1804,13 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	finalPath := filepath.Join(tempDir, "final.md")
 	require.FileExists(t, finalPath)
 	require.NoFileExists(t, newnameNoExt)
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-2], "File renamed to <code>final.md</code>")
+	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
+	require.Contains(t, msgs[len(msgs)-1], "final.md")
 }
 
 func TestTreeEditAndRename_NoAndCancel(t *testing.T) {
@@ -1869,4 +1891,124 @@ func TestTreeEditAndRename_NoAndCancel(t *testing.T) {
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:rfd:n:"+tokKeptWithExt))
 	require.FileExists(t, keptWithExt)
 	require.NoFileExists(t, filepath.Join(tempDir, "keptname"))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
+	require.Contains(t, msgs[len(msgs)-1], "keptname.txt")
+}
+
+func TestTreeEditAndRename_FolderOpenPreserved(t *testing.T) {
+	tempDir := t.TempDir()
+	subADir := filepath.Join(tempDir, "subA")
+	subBDir := filepath.Join(subADir, "subB")
+	require.NoError(t, os.MkdirAll(subBDir, 0o755))
+	itemPath := filepath.Join(subBDir, "item.txt")
+	require.NoError(t, os.WriteFile(itemPath, []byte("initial-data"), 0o644))
+
+	srv := &apiServer{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	cfg := &config.Config{
+		WorkDir: tempDir,
+		Telegram: config.TelegramConfig{
+			BotToken:     "TEST:TOKEN",
+			API:          server.URL,
+			AllowedUsers: []string{"42", "admin"},
+		},
+		Menu: []config.ButtonNode{
+			{Name: "tg-tree", Type: "button", Function: "tg-tree", Path: tempDir},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	app := bot.NewApp(cfg, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	app.SetHTTPClient(server.Client())
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, server.Client()),
+		tgbot.WithServerURL(server.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// 1. Open tree explorer
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+
+	tokSubA := app.TreeState.GetToken(subADir)
+	tokSubB := app.TreeState.GetToken(subBDir)
+
+	// 2. Expand subA
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSubA))
+	// 3. Expand subB
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSubB))
+
+	tokItem := app.TreeState.GetToken(itemPath)
+
+	// 4. Select item.txt
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokItem))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	lastTree := msgs[len(msgs)-1]
+	require.Contains(t, lastTree, "subA/")
+	require.Contains(t, lastTree, "subB/")
+	require.Contains(t, lastTree, "item.txt")
+	require.Contains(t, lastTree, "<p>file operations:</p>")
+	require.Contains(t, lastTree, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:ren:%s">rename</tg-button>`, tokItem))
+	require.Contains(t, lastTree, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:edit:%s">edit</tg-button>`, tokItem))
+
+	// 5. Edit file item.txt
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokItem))
+	srv.mu.Lock()
+	promptMsgID := srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "modified-content", promptMsgID))
+	content, err := os.ReadFile(itemPath)
+	require.NoError(t, err)
+	require.Equal(t, "modified-content", string(content))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	// The message before last is the status, and the last message is the newly sent updated tree
+	require.Contains(t, msgs[len(msgs)-2], "content updated successfully")
+	updatedTree := msgs[len(msgs)-1]
+	require.Contains(t, updatedTree, "Folder Explorer")
+	// Verify subA and subB are STILL expanded!
+	require.Contains(t, updatedTree, "subA/")
+	require.Contains(t, updatedTree, "subB/")
+	require.Contains(t, updatedTree, "item.txt")
+	require.Contains(t, updatedTree, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">item.txt</tg-button> 👈<br/>`, tokItem))
+
+	// 6. Rename item.txt to renamed.txt
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokItem))
+	srv.mu.Lock()
+	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "renamed.txt", promptMsgID))
+	renamedPath := filepath.Join(subBDir, "renamed.txt")
+	require.FileExists(t, renamedPath)
+	require.NoFileExists(t, itemPath)
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-2], "File renamed to <code>renamed.txt</code>")
+	updatedTreeAfterRename := msgs[len(msgs)-1]
+	require.Contains(t, updatedTreeAfterRename, "Folder Explorer")
+	// Verify both subA and subB remain open!
+	require.Contains(t, updatedTreeAfterRename, "subA/")
+	require.Contains(t, updatedTreeAfterRename, "subB/")
+	require.Contains(t, updatedTreeAfterRename, "renamed.txt")
+	tokRenamed := app.TreeState.GetToken(renamedPath)
+	require.Contains(t, updatedTreeAfterRename, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">renamed.txt</tg-button> 👈<br/>`, tokRenamed))
 }

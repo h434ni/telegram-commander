@@ -179,8 +179,9 @@ func TestBuildFileRichMessageHTML(t *testing.T) {
 	require.Contains(t, html, `<tg-button-row align="left">`)
 	require.Contains(t, html, `<tg-button type="copy_text" style="success" text="/path/to/test.txt">copy full path</tg-button>`)
 	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:send:abc1">download file</tg-button>`)
-	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:edit:abc1">edit file</tg-button>`)
-	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:ren:abc1">rename file</tg-button>`)
+	require.Contains(t, html, "<p>file operations:</p>")
+	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:ren:abc1">rename</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:edit:abc1">edit</tg-button>`)
 }
 
 func TestTreeStateManager_Awaiting(t *testing.T) {
