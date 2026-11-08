@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,12 @@ const (
 	cbTreeFile   = "t:file:"
 	cbTreeSend   = "t:send:"
 	cbTreeZip    = "t:zip:"
+	cbTreeEdit   = "t:edit:"
+	cbTreeRen    = "t:ren:"
+	cbTreeRfeY   = "t:rfe:y:"
+	cbTreeRfeN   = "t:rfe:n:"
+	cbTreeRfdY   = "t:rfd:y:"
+	cbTreeRfdN   = "t:rfd:n:"
 	cbTreeHome   = "t:home"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
@@ -32,6 +39,22 @@ const (
 	maxFileSendSize = 20 * 1024 * 1024 // 20 MB max file size for telegram upload
 	treeMaxLines    = 35               // max lines rendered in tree
 )
+
+// TreeActionType represents a pending user action in tree explorer.
+type TreeActionType int
+
+const (
+	TreeActionNone TreeActionType = iota
+	TreeActionEdit
+	TreeActionRename
+)
+
+// TreeAwaiting tracks user awaiting state for file edit or rename.
+type TreeAwaiting struct {
+	Action      TreeActionType
+	TargetPath  string
+	PromptMsgID int
+}
 
 // TreeStateManager maps directory paths to tokens and tracks expanded state per user.
 type TreeStateManager struct {
@@ -43,6 +66,7 @@ type TreeStateManager struct {
 	userMessages  map[int64]int             // userID -> message ID of active tree
 	expanded      map[int64]map[string]bool // userID -> set of expanded clean paths
 	selectedItems map[int64]string          // userID -> last clicked folder or file path
+	awaiting      map[int64]TreeAwaiting    // userID -> pending edit/rename action
 	homePath      string
 }
 
@@ -65,6 +89,7 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		userMessages:  make(map[int64]int),
 		expanded:      make(map[int64]map[string]bool),
 		selectedItems: make(map[int64]string),
+		awaiting:      make(map[int64]TreeAwaiting),
 		homePath:      filepath.Clean(home),
 	}
 }
@@ -218,6 +243,37 @@ func (m *TreeStateManager) ClearUserMessage(userID int64) {
 	delete(m.userMessages, userID)
 	delete(m.expanded, userID)
 	delete(m.selectedItems, userID)
+	delete(m.awaiting, userID)
+}
+
+// SetAwaiting records pending action awaiting user input.
+func (m *TreeStateManager) SetAwaiting(userID int64, action TreeActionType, path string, promptMsgID int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if action == TreeActionNone {
+		delete(m.awaiting, userID)
+		return
+	}
+	m.awaiting[userID] = TreeAwaiting{
+		Action:      action,
+		TargetPath:  filepath.Clean(path),
+		PromptMsgID: promptMsgID,
+	}
+}
+
+// GetAwaiting retrieves any pending tree awaiting action for userID.
+func (m *TreeStateManager) GetAwaiting(userID int64) (TreeAwaiting, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	aw, ok := m.awaiting[userID]
+	return aw, ok
+}
+
+// ClearAwaiting clears pending tree awaiting state for userID.
+func (m *TreeStateManager) ClearAwaiting(userID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.awaiting, userID)
 }
 
 // isTreeButton returns true if the node targets the tree feature.
@@ -592,6 +648,275 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			a.Log.Error("failed to send tree file document", "path", targetPath, "err", sendErr)
 			a.showStatus(ctx, b, chatID, cq.From.ID, "Failed to send file: "+sendErr.Error())
 		}
+
+	case strings.HasPrefix(data, cbTreeEdit):
+		tok := strings.TrimPrefix(data, cbTreeEdit)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "File reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access file: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+		if fi.IsDir() {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is a directory.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return aErr
+		})
+
+		ext := filepath.Ext(targetPath)
+		promptText := fmt.Sprintf("Reply to this message with text or a file with the same format (%s) to replace '%s'.", ext, filepath.Base(targetPath))
+		if ext == "" {
+			promptText = fmt.Sprintf("Reply to this message with text or a file without format to replace '%s'.", filepath.Base(targetPath))
+		}
+		var promptMsg *models.Message
+		_ = a.telegramCall(ctx, chatID, func() error {
+			var sendErr error
+			promptMsg, sendErr = b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text:   promptText,
+				ReplyMarkup: &models.ForceReply{
+					ForceReply:            true,
+					Selective:             true,
+					InputFieldPlaceholder: "Send text or file to replace...",
+				},
+			})
+			return sendErr
+		})
+		promptID := 0
+		if promptMsg != nil {
+			promptID = promptMsg.ID
+		}
+		a.TreeState.SetAwaiting(cq.From.ID, TreeActionEdit, targetPath, promptID)
+
+	case strings.HasPrefix(data, cbTreeRen):
+		tok := strings.TrimPrefix(data, cbTreeRen)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "File reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access file: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+		if fi.IsDir() {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is a directory.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return aErr
+		})
+
+		var promptMsg *models.Message
+		_ = a.telegramCall(ctx, chatID, func() error {
+			var sendErr error
+			promptMsg, sendErr = b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text:   fmt.Sprintf("Reply to this message with the new name for '%s'.", filepath.Base(targetPath)),
+				ReplyMarkup: &models.ForceReply{
+					ForceReply:            true,
+					Selective:             true,
+					InputFieldPlaceholder: "Enter new name...",
+				},
+			})
+			return sendErr
+		})
+		promptID := 0
+		if promptMsg != nil {
+			promptID = promptMsg.ID
+		}
+		a.TreeState.SetAwaiting(cq.From.ID, TreeActionRename, targetPath, promptID)
+
+	case strings.HasPrefix(data, cbTreeRfeY):
+		parts := strings.Split(strings.TrimPrefix(data, cbTreeRfeY), ":")
+		if len(parts) == 2 {
+			oldPath := a.TreeState.GetPath(parts[0])
+			newPath := a.TreeState.GetPath(parts[1])
+			if oldPath != "" && newPath != "" {
+				err := os.Rename(oldPath, newPath)
+				if err != nil {
+					_ = a.telegramCall(ctx, chatID, func() error {
+						_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+							CallbackQueryID: cq.ID,
+							Text:            "Failed to rename: " + err.Error(),
+							ShowAlert:       true,
+						})
+						return aErr
+					})
+					return
+				}
+				a.TreeState.SetSelectedItem(cq.From.ID, newPath)
+				_ = a.telegramCall(ctx, chatID, func() error {
+					_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+						CallbackQueryID: cq.ID,
+						Text:            "Renamed to " + filepath.Base(newPath),
+					})
+					return aErr
+				})
+				if treeMsgID := a.TreeState.GetUserMessageID(cq.From.ID); treeMsgID != 0 {
+					_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, cq.From.ID)
+				}
+				_ = a.telegramCall(ctx, chatID, func() error {
+					_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+						ChatID:    chatID,
+						MessageID: msgID,
+						RichMessage: &models.InputRichMessage{
+							HTML: fmt.Sprintf("<p>File renamed to <code>%s</code>.</p>", html.EscapeString(filepath.Base(newPath))),
+						},
+					})
+					return editErr
+				})
+			}
+		}
+
+	case strings.HasPrefix(data, cbTreeRfeN):
+		tok := strings.TrimPrefix(data, cbTreeRfeN)
+		oldPath := a.TreeState.GetPath(tok)
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Kept original name",
+			})
+			return aErr
+		})
+		_ = a.telegramCall(ctx, chatID, func() error {
+			name := filepath.Base(oldPath)
+			if name == "." || name == "" {
+				name = "file"
+			}
+			_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+				ChatID:    chatID,
+				MessageID: msgID,
+				RichMessage: &models.InputRichMessage{
+					HTML: fmt.Sprintf("<p>Kept original name <code>%s</code>.</p>", html.EscapeString(name)),
+				},
+			})
+			return editErr
+		})
+
+	case strings.HasPrefix(data, cbTreeRfdY):
+		parts := strings.Split(strings.TrimPrefix(data, cbTreeRfdY), ":")
+		if len(parts) == 2 {
+			withExt := a.TreeState.GetPath(parts[0])
+			withoutExt := a.TreeState.GetPath(parts[1])
+			if withExt != "" && withoutExt != "" {
+				err := os.Rename(withExt, withoutExt)
+				if err != nil {
+					_ = a.telegramCall(ctx, chatID, func() error {
+						_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+							CallbackQueryID: cq.ID,
+							Text:            "Failed to delete format: " + err.Error(),
+							ShowAlert:       true,
+						})
+						return aErr
+					})
+					return
+				}
+				a.TreeState.SetSelectedItem(cq.From.ID, withoutExt)
+				_ = a.telegramCall(ctx, chatID, func() error {
+					_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+						CallbackQueryID: cq.ID,
+						Text:            "Format deleted. Renamed to " + filepath.Base(withoutExt),
+					})
+					return aErr
+				})
+				if treeMsgID := a.TreeState.GetUserMessageID(cq.From.ID); treeMsgID != 0 {
+					_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, cq.From.ID)
+				}
+				_ = a.telegramCall(ctx, chatID, func() error {
+					_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+						ChatID:    chatID,
+						MessageID: msgID,
+						RichMessage: &models.InputRichMessage{
+							HTML: fmt.Sprintf("<p>Format deleted. File renamed to <code>%s</code> (without format).</p>", html.EscapeString(filepath.Base(withoutExt))),
+						},
+					})
+					return editErr
+				})
+			}
+		}
+
+	case strings.HasPrefix(data, cbTreeRfdN):
+		tok := strings.TrimPrefix(data, cbTreeRfdN)
+		withExt := a.TreeState.GetPath(tok)
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            "Kept format",
+			})
+			return aErr
+		})
+		_ = a.telegramCall(ctx, chatID, func() error {
+			name := filepath.Base(withExt)
+			if name == "." || name == "" {
+				name = "file"
+			}
+			_, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+				ChatID:    chatID,
+				MessageID: msgID,
+				RichMessage: &models.InputRichMessage{
+					HTML: fmt.Sprintf("<p>Kept format for <code>%s</code>.</p>", html.EscapeString(name)),
+				},
+			})
+			return editErr
+		})
 	}
 }
 
@@ -669,6 +994,8 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download folder</tg-button>\n", tok))
 			} else {
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit file</tg-button>\n", tok))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename file</tg-button>\n", tok))
 			}
 			sb.WriteString("</tg-button-row>")
 		}
@@ -798,7 +1125,7 @@ func formatFileSize(bytes int64) string {
 // formatTildePath formats a path starting with ~/ if it resides in home or root.
 func formatTildePath(path, home, root string) string {
 	cleanPath := filepath.Clean(path)
-	for _, base := range []string{home, root} {
+	for _, base := range []string{root, home} {
 		if base == "" {
 			continue
 		}
@@ -828,6 +1155,8 @@ func buildFileRichMessageHTML(filePath, tok string, size int64) string {
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
 		html.EscapeString(filePath), copyButtonLabel(filePath)))
 	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit file</tg-button>\n", tok))
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename file</tg-button>\n", tok))
 	sb.WriteString("</tg-button-row>")
 	return sb.String()
 }
@@ -915,4 +1244,251 @@ func createZipArchive(targetPath string, maxBytes int64) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// handleTreeMessage checks if user is awaiting tree input (edit/rename) and processes it.
+// Returns true if the message was handled.
+func (a *App) handleTreeMessage(ctx context.Context, b *bot.Bot, msg *models.Message) bool {
+	if msg == nil || msg.From == nil {
+		return false
+	}
+	userID := msg.From.ID
+	chatID := msg.Chat.ID
+	aw, ok := a.TreeState.GetAwaiting(userID)
+	if !ok || aw.Action == TreeActionNone {
+		return false
+	}
+
+	text := strings.TrimSpace(msg.Text)
+	if text == "/cancel" {
+		a.TreeState.ClearAwaiting(userID)
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text:   "Action cancelled.",
+			})
+			return err
+		})
+		return true
+	}
+	if text == btnHome || text == btnBack || text == btnCancel {
+		a.TreeState.ClearAwaiting(userID)
+		return false
+	}
+
+	// "(Message should be a reply)"
+	if msg.ReplyToMessage == nil {
+		a.showStatus(ctx, b, chatID, userID, "Please reply to the message to complete this action, or send /cancel to abort.")
+		return true
+	}
+	if aw.PromptMsgID != 0 && msg.ReplyToMessage.ID != aw.PromptMsgID && msg.ReplyToMessage.ID != a.TreeState.GetUserMessageID(userID) {
+		a.showStatus(ctx, b, chatID, userID, "Please reply directly to the prompt message.")
+		return true
+	}
+
+	switch aw.Action {
+	case TreeActionEdit:
+		a.handleTreeEditInput(ctx, b, chatID, userID, aw, msg)
+		return true
+
+	case TreeActionRename:
+		a.handleTreeRenameInput(ctx, b, chatID, userID, aw, msg)
+		return true
+	}
+
+	return false
+}
+
+func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userID int64, aw TreeAwaiting, msg *models.Message) {
+	if msg.Document != nil {
+		uploadedName := msg.Document.FileName
+		if uploadedName == "" {
+			uploadedName = filepath.Base(aw.TargetPath)
+		}
+		origExt := filepath.Ext(aw.TargetPath)
+		uploadedExt := filepath.Ext(uploadedName)
+		if !strings.EqualFold(origExt, uploadedExt) {
+			a.TreeState.ClearAwaiting(userID)
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+					ChatID: chatID,
+					Text:   fmt.Sprintf("Format mismatch: expected %q, got %q. Content not modified.", origExt, uploadedExt),
+				})
+				return err
+			})
+			return
+		}
+
+		f, err := b.GetFile(ctx, &bot.GetFileParams{FileID: msg.Document.FileID})
+		if err != nil {
+			a.Log.Error("failed to getFile", "err", err)
+			a.showStatus(ctx, b, chatID, userID, "Failed to download file from Telegram: "+err.Error())
+			return
+		}
+		downloadURL := b.FileDownloadLink(f)
+		client := a.httpClient
+		if client == nil {
+			client = http.DefaultClient
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+		if err != nil {
+			a.showStatus(ctx, b, chatID, userID, "Failed to build download request: "+err.Error())
+			return
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			a.showStatus(ctx, b, chatID, userID, "Failed to download file: "+err.Error())
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			a.showStatus(ctx, b, chatID, userID, fmt.Sprintf("Download failed: HTTP %d", resp.StatusCode))
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxFileSendSize+1))
+		if err != nil {
+			a.showStatus(ctx, b, chatID, userID, "Failed to read file data: "+err.Error())
+			return
+		}
+		if int64(len(data)) > maxFileSendSize {
+			a.showStatus(ctx, b, chatID, userID, "File is too large (> 20 MB).")
+			return
+		}
+
+		err = os.WriteFile(aw.TargetPath, data, 0o644)
+		if err != nil {
+			a.showStatus(ctx, b, chatID, userID, "Failed to write file: "+err.Error())
+			return
+		}
+		a.TreeState.ClearAwaiting(userID)
+		if treeMsgID := a.TreeState.GetUserMessageID(userID); treeMsgID != 0 {
+			_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, userID)
+		}
+
+		// "If the user response was a file, ask user if they wish to rename the file aswell."
+		targetDir := filepath.Dir(aw.TargetPath)
+		newTargetPath := filepath.Join(targetDir, uploadedName)
+		tokOld := a.TreeState.GetToken(aw.TargetPath)
+		tokNew := a.TreeState.GetToken(newTargetPath)
+		richHTML := fmt.Sprintf(
+			"<p>File content replaced from <code>%s</code>.</p>\n<p>Do you wish to rename the file to <code>%s</code> as well?</p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" style=\"success\" data=\"%s%s:%s\">✅ Yes</tg-button>\n  <tg-button type=\"callback_data\" style=\"danger\" data=\"%s%s\">❌ No</tg-button>\n</tg-button-row>",
+			html.EscapeString(uploadedName),
+			html.EscapeString(uploadedName),
+			cbTreeRfeY, tokOld, tokNew,
+			cbTreeRfeN, tokOld,
+		)
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+				ChatID: chatID,
+				RichMessage: models.InputRichMessage{
+					HTML: richHTML,
+				},
+			})
+			return sErr
+		})
+		return
+	}
+
+	if msg.Text != "" {
+		err := os.WriteFile(aw.TargetPath, []byte(msg.Text), 0o644)
+		if err != nil {
+			a.showStatus(ctx, b, chatID, userID, "Failed to write file: "+err.Error())
+			return
+		}
+		a.TreeState.ClearAwaiting(userID)
+		if treeMsgID := a.TreeState.GetUserMessageID(userID); treeMsgID != 0 {
+			_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, userID)
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+				ChatID: chatID,
+				RichMessage: models.InputRichMessage{
+					HTML: fmt.Sprintf("<p>File <code>%s</code> content updated successfully.</p>", html.EscapeString(filepath.Base(aw.TargetPath))),
+				},
+			})
+			return sErr
+		})
+		return
+	}
+
+	a.showStatus(ctx, b, chatID, userID, "Please send only a text message or a file with the same format.")
+}
+
+func (a *App) handleTreeRenameInput(ctx context.Context, b *bot.Bot, chatID, userID int64, aw TreeAwaiting, msg *models.Message) {
+	rawName := strings.TrimSpace(msg.Text)
+	if rawName == "" {
+		a.showStatus(ctx, b, chatID, userID, "Please send a text message with the new name.")
+		return
+	}
+
+	if rawName == "." || rawName == ".." || strings.Contains(rawName, "/") || strings.Contains(rawName, "\\") {
+		a.showStatus(ctx, b, chatID, userID, "Invalid file name.")
+		return
+	}
+
+	origExt := filepath.Ext(aw.TargetPath)
+	newExt := filepath.Ext(rawName)
+	targetDir := filepath.Dir(aw.TargetPath)
+
+	if newExt != "" || origExt == "" {
+		finalPath := filepath.Join(targetDir, rawName)
+		err := os.Rename(aw.TargetPath, finalPath)
+		if err != nil {
+			a.showStatus(ctx, b, chatID, userID, "Failed to rename: "+err.Error())
+			return
+		}
+		a.TreeState.SetSelectedItem(userID, finalPath)
+		a.TreeState.ClearAwaiting(userID)
+		if treeMsgID := a.TreeState.GetUserMessageID(userID); treeMsgID != 0 {
+			_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, userID)
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+				ChatID: chatID,
+				RichMessage: models.InputRichMessage{
+					HTML: fmt.Sprintf("<p>File renamed to <code>%s</code>.</p>", html.EscapeString(rawName)),
+				},
+			})
+			return sErr
+		})
+		return
+	}
+
+	// newExt == "" && origExt != ""
+	// "If the response doesn't have format, ask them that the file got renamed with the same format and if they wish to delete the format as well (to rename it again without format)"
+	nameWithExt := rawName + origExt
+	pathWithExt := filepath.Join(targetDir, nameWithExt)
+	pathWithoutExt := filepath.Join(targetDir, rawName)
+
+	err := os.Rename(aw.TargetPath, pathWithExt)
+	if err != nil {
+		a.showStatus(ctx, b, chatID, userID, "Failed to rename: "+err.Error())
+		return
+	}
+
+	a.TreeState.SetSelectedItem(userID, pathWithExt)
+	a.TreeState.ClearAwaiting(userID)
+	if treeMsgID := a.TreeState.GetUserMessageID(userID); treeMsgID != 0 {
+		_ = a.editTreeMessage(ctx, b, chatID, treeMsgID, userID)
+	}
+
+	tokWithExt := a.TreeState.GetToken(pathWithExt)
+	tokWithoutExt := a.TreeState.GetToken(pathWithoutExt)
+	richHTML := fmt.Sprintf(
+		"<p>File got renamed to <code>%s</code> with the same format (<code>%s</code>).</p>\n<p>Do you wish to delete the format as well (rename to <code>%s</code> without format)?</p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" style=\"danger\" data=\"%s%s:%s\">🗑 Delete format</tg-button>\n  <tg-button type=\"callback_data\" style=\"success\" data=\"%s%s\">Keep format</tg-button>\n</tg-button-row>",
+		html.EscapeString(nameWithExt),
+		html.EscapeString(origExt),
+		html.EscapeString(rawName),
+		cbTreeRfdY, tokWithExt, tokWithoutExt,
+		cbTreeRfdN, tokWithExt,
+	)
+	_ = a.telegramCall(ctx, chatID, func() error {
+		_, sErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+			ChatID: chatID,
+			RichMessage: models.InputRichMessage{
+				HTML: richHTML,
+			},
+		})
+		return sErr
+	})
 }

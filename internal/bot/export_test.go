@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"net/http"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ func (a *App) NewBotWithOptions(extra ...bot.Option) (*bot.Bot, error) {
 	if err != nil {
 		return nil, err
 	}
+	a.httpClient = client
 	api := strings.TrimRight(a.Cfg.Telegram.API, "/")
 	opts := []bot.Option{
 		bot.WithHTTPClient(60*time.Second, client),
@@ -24,4 +26,9 @@ func (a *App) NewBotWithOptions(extra ...bot.Option) (*bot.Bot, error) {
 	}
 	opts = append(opts, extra...)
 	return bot.New(a.Cfg.Telegram.BotToken, opts...)
+}
+
+// SetHTTPClient overrides the app httpClient (for testing).
+func (a *App) SetHTTPClient(client *http.Client) {
+	a.httpClient = client
 }

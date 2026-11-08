@@ -172,6 +172,16 @@ func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"document":   map[string]any{"file_name": filename, "file_size": size},
 			"caption":    doc["caption"],
 		})
+	case strings.HasSuffix(path, "/getFile"):
+		fileID := r.FormValue("file_id")
+		writeOK(w, map[string]any{
+			"file_id":   fileID,
+			"file_size": 17,
+			"file_path": "mock/" + fileID,
+		})
+	case strings.Contains(path, "/file/bot"):
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("mock-file-content"))
 	default:
 		writeOK(w, true)
 	}
@@ -245,6 +255,23 @@ func textUpdate(userID int64, username, text string) *models.Update {
 			Text: text,
 		},
 	}
+}
+
+func replyTextUpdate(userID int64, username, text string, replyToID int) *models.Update {
+	up := textUpdate(userID, username, text)
+	up.Message.ReplyToMessage = &models.Message{ID: replyToID}
+	return up
+}
+
+func replyDocumentUpdate(userID int64, username, filename, fileID string, replyToID int) *models.Update {
+	up := textUpdate(userID, username, "")
+	up.Message.ReplyToMessage = &models.Message{ID: replyToID}
+	up.Message.Document = &models.Document{
+		FileID:   fileID,
+		FileName: filename,
+		FileSize: 100,
+	}
+	return up
 }
 
 func callbackUpdate(userID int64, data string) *models.Update {
@@ -1534,6 +1561,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, "<p><code>~/subfolder/inner.txt</code></p>")
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, innerPath))
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:send:%s">download file</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:edit:%s">edit file</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:ren:%s">rename file</tg-button>`, tokInner))
 
 	// 2c. Click get file button to send file as document
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:send:"+tokInner))
@@ -1604,4 +1633,240 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "closed")
+}
+
+func TestTreeEditAndRenameIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	docPath := filepath.Join(tempDir, "doc.txt")
+	require.NoError(t, os.WriteFile(docPath, []byte("initial content"), 0o644))
+
+	srv := &apiServer{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	cfg := &config.Config{
+		WorkDir: tempDir,
+		Telegram: config.TelegramConfig{
+			BotToken:     "TEST:TOKEN",
+			API:          server.URL,
+			AllowedUsers: []string{"42", "admin"},
+		},
+		Menu: []config.ButtonNode{
+			{Name: "tg-tree", Type: "button", Function: "tg-tree", Path: tempDir},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	app := bot.NewApp(cfg, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	app.SetHTTPClient(server.Client())
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, server.Client()),
+		tgbot.WithServerURL(server.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// 1. Open tree explorer
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+
+	// 2. Select doc.txt
+	tokDoc := app.TreeState.GetToken(docPath)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokDoc))
+
+	// 3. Click Edit File
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokDoc))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	promptMsg := srv.messages[len(srv.messages)-1]
+	promptMsgID := promptMsg["message_id"].(int)
+	srv.mu.Unlock()
+
+	lastMsg := msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Reply to this message")
+	require.Contains(t, lastMsg, "doc.txt")
+
+	// 3a. Send non-reply text - should be rejected with requirement to reply
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "not a reply"))
+	content, err := os.ReadFile(docPath)
+	require.NoError(t, err)
+	require.Equal(t, "initial content", string(content))
+
+	// 3b. Reply with text content
+	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "new text content", promptMsgID))
+	content, err = os.ReadFile(docPath)
+	require.NoError(t, err)
+	require.Equal(t, "new text content", string(content))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-1], "content updated successfully")
+
+	// 4. Click Edit File again and reply with wrong format (.png vs .txt)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokDoc))
+	srv.mu.Lock()
+	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyDocumentUpdate(42, "admin", "image.png", "file123", promptMsgID))
+	content, err = os.ReadFile(docPath)
+	require.NoError(t, err)
+	require.Equal(t, "new text content", string(content))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-1], "Format mismatch")
+
+	// 5. Click Edit File again and reply with same format document (uploaded.txt)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokDoc))
+	srv.mu.Lock()
+	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyDocumentUpdate(42, "admin", "uploaded.txt", "file456", promptMsgID))
+	content, err = os.ReadFile(docPath)
+	require.NoError(t, err)
+	require.Equal(t, "mock-file-content", string(content))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Do you wish to rename the file to <code>uploaded.txt</code> as well?")
+	require.Contains(t, lastMsg, "t:rfe:y:")
+	require.Contains(t, lastMsg, "t:rfe:n:")
+
+	// Extract callback data from the prompt buttons
+	uploadedPath := filepath.Join(tempDir, "uploaded.txt")
+	tokUploaded := app.TreeState.GetToken(uploadedPath)
+	// Click Yes to rename
+	b.ProcessUpdate(ctx, callbackUpdate(42, fmt.Sprintf("t:rfe:y:%s:%s", tokDoc, tokUploaded)))
+	require.FileExists(t, uploadedPath)
+	require.NoFileExists(t, docPath)
+
+	// 6. Rename uploaded.txt without format ("newname")
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokUploaded))
+	srv.mu.Lock()
+	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "newname", promptMsgID))
+	// File should be renamed to newname.txt (with same format)
+	newnameWithExt := filepath.Join(tempDir, "newname.txt")
+	require.FileExists(t, newnameWithExt)
+	require.NoFileExists(t, uploadedPath)
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "File got renamed to <code>newname.txt</code> with the same format")
+	require.Contains(t, lastMsg, "Do you wish to delete the format as well")
+	require.Contains(t, lastMsg, "t:rfd:y:")
+	require.Contains(t, lastMsg, "t:rfd:n:")
+
+	// Click Yes (delete format)
+	newnameNoExt := filepath.Join(tempDir, "newname")
+	tokWithExt := app.TreeState.GetToken(newnameWithExt)
+	tokNoExt := app.TreeState.GetToken(newnameNoExt)
+	b.ProcessUpdate(ctx, callbackUpdate(42, fmt.Sprintf("t:rfd:y:%s:%s", tokWithExt, tokNoExt)))
+	require.FileExists(t, newnameNoExt)
+	require.NoFileExists(t, newnameWithExt)
+
+	// 7. Rename newname with format ("final.md")
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokNoExt))
+	srv.mu.Lock()
+	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "final.md", promptMsgID))
+	finalPath := filepath.Join(tempDir, "final.md")
+	require.FileExists(t, finalPath)
+	require.NoFileExists(t, newnameNoExt)
+}
+
+func TestTreeEditAndRename_NoAndCancel(t *testing.T) {
+	tempDir := t.TempDir()
+	docPath := filepath.Join(tempDir, "sample.txt")
+	require.NoError(t, os.WriteFile(docPath, []byte("initial"), 0o644))
+
+	srv := &apiServer{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	cfg := &config.Config{
+		WorkDir: tempDir,
+		Telegram: config.TelegramConfig{
+			BotToken:     "TEST:TOKEN",
+			API:          server.URL,
+			AllowedUsers: []string{"42", "admin"},
+		},
+		Menu: []config.ButtonNode{
+			{Name: "tg-tree", Type: "button", Function: "tg-tree", Path: tempDir},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	app := bot.NewApp(cfg, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	app.SetHTTPClient(server.Client())
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, server.Client()),
+		tgbot.WithServerURL(server.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+
+	tokDoc := app.TreeState.GetToken(docPath)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokDoc))
+
+	// 1. Test /cancel while awaiting edit
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokDoc))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/cancel"))
+	_, ok := app.TreeState.GetAwaiting(42)
+	require.False(t, ok)
+
+	// 2. Test edit with file then clicking "No" on rename
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokDoc))
+	srv.mu.Lock()
+	promptMsgID := srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyDocumentUpdate(42, "admin", "other.txt", "file789", promptMsgID))
+	content, err := os.ReadFile(docPath)
+	require.NoError(t, err)
+	require.Equal(t, "mock-file-content", string(content))
+
+	// Click No to keep original name
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:rfe:n:"+tokDoc))
+	require.FileExists(t, docPath)
+	require.NoFileExists(t, filepath.Join(tempDir, "other.txt"))
+
+	// 3. Test rename without format then clicking "No" (Keep format)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokDoc))
+	srv.mu.Lock()
+	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	srv.mu.Unlock()
+
+	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "keptname", promptMsgID))
+	keptWithExt := filepath.Join(tempDir, "keptname.txt")
+	require.FileExists(t, keptWithExt)
+	require.NoFileExists(t, docPath)
+
+	tokKeptWithExt := app.TreeState.GetToken(keptWithExt)
+	// Click No (keep format)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:rfd:n:"+tokKeptWithExt))
+	require.FileExists(t, keptWithExt)
+	require.NoFileExists(t, filepath.Join(tempDir, "keptname"))
 }

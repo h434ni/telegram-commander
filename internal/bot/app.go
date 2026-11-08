@@ -30,6 +30,7 @@ type App struct {
 	Index     *Index
 	Log       *slog.Logger
 	TreeState *TreeStateManager
+	httpClient *http.Client
 
 	navMu     sync.Mutex
 	nav       map[int64]userMenu
@@ -69,16 +70,24 @@ func NewApp(cfg *config.Config, reg *function.Registry, exec executor.Executor, 
 	if cfg != nil && cfg.WorkDir != "" {
 		home = cfg.WorkDir
 	}
+	var client *http.Client
+	if cfg != nil {
+		client, _ = HTTPClient(cfg.Telegram)
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
 	return &App{
-		Cfg:       cfg,
-		Registry:  reg,
-		Exec:      exec,
-		Index:     idx,
-		Log:       log,
-		TreeState: NewTreeStateManager(home),
-		nav:       make(map[int64]userMenu),
-		confirms:  make(map[int64]confirmWait),
-		sendLocks: make(map[int64]*sync.Mutex),
+		Cfg:        cfg,
+		Registry:   reg,
+		Exec:       exec,
+		Index:      idx,
+		Log:        log,
+		TreeState:  NewTreeStateManager(home),
+		httpClient: client,
+		nav:        make(map[int64]userMenu),
+		confirms:   make(map[int64]confirmWait),
+		sendLocks:  make(map[int64]*sync.Mutex),
 	}
 }
 
@@ -156,6 +165,7 @@ func (a *App) NewBot() (*bot.Bot, error) {
 	if err != nil {
 		return nil, err
 	}
+	a.httpClient = client
 	opts := []bot.Option{
 		bot.WithHTTPClient(60*time.Second, client),
 		bot.WithServerURL(strings.TrimRight(a.Cfg.Telegram.API, "/")),
@@ -229,6 +239,9 @@ func (a *App) defaultHandler(ctx context.Context, b *bot.Bot, update *models.Upd
 			})
 			return err
 		})
+		return
+	}
+	if a.handleTreeMessage(ctx, b, update.Message) {
 		return
 	}
 	a.handleMenuText(ctx, b, update.Message)

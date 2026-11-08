@@ -179,6 +179,36 @@ func TestBuildFileRichMessageHTML(t *testing.T) {
 	require.Contains(t, html, `<tg-button-row align="left">`)
 	require.Contains(t, html, `<tg-button type="copy_text" style="success" text="/path/to/test.txt">copy full path</tg-button>`)
 	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:send:abc1">download file</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:edit:abc1">edit file</tg-button>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="success" data="t:ren:abc1">rename file</tg-button>`)
+}
+
+func TestTreeStateManager_Awaiting(t *testing.T) {
+	mgr := NewTreeStateManager("/home/ec2-user")
+	userID := int64(999)
+
+	_, ok := mgr.GetAwaiting(userID)
+	require.False(t, ok)
+
+	mgr.SetAwaiting(userID, TreeActionEdit, "/home/ec2-user/test.txt", 101)
+	aw, ok := mgr.GetAwaiting(userID)
+	require.True(t, ok)
+	require.Equal(t, TreeActionEdit, aw.Action)
+	require.Equal(t, "/home/ec2-user/test.txt", aw.TargetPath)
+	require.Equal(t, 101, aw.PromptMsgID)
+
+	mgr.ClearAwaiting(userID)
+	_, ok = mgr.GetAwaiting(userID)
+	require.False(t, ok)
+
+	mgr.SetAwaiting(userID, TreeActionRename, "/home/ec2-user/test.txt", 102)
+	aw, ok = mgr.GetAwaiting(userID)
+	require.True(t, ok)
+	require.Equal(t, TreeActionRename, aw.Action)
+
+	mgr.ClearUserMessage(userID)
+	_, ok = mgr.GetAwaiting(userID)
+	require.False(t, ok)
 }
 
 func TestFormatTildePath(t *testing.T) {
