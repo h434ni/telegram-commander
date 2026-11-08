@@ -513,17 +513,20 @@ func (a *App) sendMenu(ctx context.Context, b *bot.Bot, chatID, userID int64, no
 	a.sendNav(ctx, b, chatID, userID, view.Title, view.Reply, "")
 }
 
-func (a *App) showStatus(ctx context.Context, b *bot.Bot, chatID, userID int64, text string) {
+func (a *App) currentReplyMarkup(userID int64) models.ReplyMarkup {
 	st := a.getNav(userID)
 	view, err := a.Index.BuildMenu(st.nodeID, st.page)
 	if err != nil {
 		view, err = a.Index.BuildMenu("", 0)
 		if err != nil {
-			a.sendKeep(ctx, b, chatID, text, nil, "")
-			return
+			return nil
 		}
 	}
-	a.sendKeep(ctx, b, chatID, text, view.Reply, "")
+	return view.Reply
+}
+
+func (a *App) showStatus(ctx context.Context, b *bot.Bot, chatID, userID int64, text string) {
+	a.sendKeep(ctx, b, chatID, text, a.currentReplyMarkup(userID), "")
 }
 
 // sendNav shows a navigation screen (menu, confirm, or run prompt) and

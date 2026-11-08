@@ -90,6 +90,7 @@ func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"chat_id":      r.FormValue("chat_id"),
 			"text":         text,
 			"rich_message": r.FormValue("rich_message"),
+			"reply_markup": r.FormValue("reply_markup"),
 			"message_id":   id,
 			"kind":         "send_rich",
 		}
@@ -1688,23 +1689,20 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	srv.mu.Unlock()
 
 	lastMsg := msgs[len(msgs)-1]
-	require.Contains(t, lastMsg, "Reply to this message")
+	require.Contains(t, lastMsg, "replace 'doc.txt'")
 	require.Contains(t, lastMsg, "doc.txt")
 
-	// 3a. Send non-reply text - should be rejected with requirement to reply
-	b.ProcessUpdate(ctx, textUpdate(42, "admin", "not a reply"))
+	// 3. Send non-reply text - should update content without requiring a reply
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "new text content"))
 	content, err := os.ReadFile(docPath)
-	require.NoError(t, err)
-	require.Equal(t, "initial content", string(content))
-
-	// 3b. Reply with text content
-	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "new text content", promptMsgID))
-	content, err = os.ReadFile(docPath)
 	require.NoError(t, err)
 	require.Equal(t, "new text content", string(content))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
+	lastTreeMsg := srv.messages[len(srv.messages)-1]
+	require.NotEmpty(t, lastTreeMsg["reply_markup"])
+	require.Contains(t, fmt.Sprintf("%v", lastTreeMsg["reply_markup"]), "tg-tree")
 	srv.mu.Unlock()
 	require.Contains(t, msgs[len(msgs)-2], "content updated successfully")
 	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
@@ -1759,13 +1757,14 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")
 	require.Contains(t, msgs[len(msgs)-1], "uploaded.txt")
 
-	// 6. Rename uploaded.txt without format ("newname")
+	// 6. Rename uploaded.txt without format ("newname") without reply
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokUploaded))
 	srv.mu.Lock()
-	promptMsgID = srv.messages[len(srv.messages)-1]["message_id"].(int)
+	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
+	require.Contains(t, msgs[len(msgs)-1], "Send the new name for 'uploaded.txt'")
 
-	b.ProcessUpdate(ctx, replyTextUpdate(42, "admin", "newname", promptMsgID))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "newname"))
 	// File should be renamed to newname.txt (with same format)
 	newnameWithExt := filepath.Join(tempDir, "newname.txt")
 	require.FileExists(t, newnameWithExt)
@@ -1807,6 +1806,9 @@ func TestTreeEditAndRenameIntegration(t *testing.T) {
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
+	lastTreeMsg = srv.messages[len(srv.messages)-1]
+	require.NotEmpty(t, lastTreeMsg["reply_markup"])
+	require.Contains(t, fmt.Sprintf("%v", lastTreeMsg["reply_markup"]), "tg-tree")
 	srv.mu.Unlock()
 	require.Contains(t, msgs[len(msgs)-2], "File renamed to <code>final.md</code>")
 	require.Contains(t, msgs[len(msgs)-1], "Folder Explorer")

@@ -326,6 +326,7 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.currentReplyMarkup(user.ID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(user.ID, msg.ID)
@@ -695,21 +696,17 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 		})
 
 		ext := filepath.Ext(targetPath)
-		promptText := fmt.Sprintf("Reply to this message with text or a file with the same format (%s) to replace '%s'.", ext, filepath.Base(targetPath))
+		promptText := fmt.Sprintf("Send text or a file with the same format (%s) to replace '%s', or /cancel to abort.", ext, filepath.Base(targetPath))
 		if ext == "" {
-			promptText = fmt.Sprintf("Reply to this message with text or a file without format to replace '%s'.", filepath.Base(targetPath))
+			promptText = fmt.Sprintf("Send text or a file without format to replace '%s', or /cancel to abort.", filepath.Base(targetPath))
 		}
 		var promptMsg *models.Message
 		_ = a.telegramCall(ctx, chatID, func() error {
 			var sendErr error
 			promptMsg, sendErr = b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: chatID,
-				Text:   promptText,
-				ReplyMarkup: &models.ForceReply{
-					ForceReply:            true,
-					Selective:             true,
-					InputFieldPlaceholder: "Send text or file to replace...",
-				},
+				ChatID:      chatID,
+				Text:        promptText,
+				ReplyMarkup: a.currentReplyMarkup(cq.From.ID),
 			})
 			return sendErr
 		})
@@ -768,13 +765,9 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 		_ = a.telegramCall(ctx, chatID, func() error {
 			var sendErr error
 			promptMsg, sendErr = b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: chatID,
-				Text:   fmt.Sprintf("Reply to this message with the new name for '%s'.", filepath.Base(targetPath)),
-				ReplyMarkup: &models.ForceReply{
-					ForceReply:            true,
-					Selective:             true,
-					InputFieldPlaceholder: "Enter new name...",
-				},
+				ChatID:      chatID,
+				Text:        fmt.Sprintf("Send the new name for '%s', or /cancel to abort.", filepath.Base(targetPath)),
+				ReplyMarkup: a.currentReplyMarkup(cq.From.ID),
 			})
 			return sendErr
 		})
@@ -962,6 +955,7 @@ func (a *App) sendUpdatedTreeMessage(ctx context.Context, b *bot.Bot, chatID, us
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.currentReplyMarkup(userID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(userID, msg.ID)
@@ -1301,8 +1295,9 @@ func (a *App) handleTreeMessage(ctx context.Context, b *bot.Bot, msg *models.Mes
 		a.TreeState.ClearAwaiting(userID)
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, err := b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: chatID,
-				Text:   "Action cancelled.",
+				ChatID:      chatID,
+				Text:        "Action cancelled.",
+				ReplyMarkup: a.currentReplyMarkup(userID),
 			})
 			return err
 		})
@@ -1311,16 +1306,6 @@ func (a *App) handleTreeMessage(ctx context.Context, b *bot.Bot, msg *models.Mes
 	if text == btnHome || text == btnBack || text == btnCancel {
 		a.TreeState.ClearAwaiting(userID)
 		return false
-	}
-
-	// "(Message should be a reply)"
-	if msg.ReplyToMessage == nil {
-		a.showStatus(ctx, b, chatID, userID, "Please reply to the message to complete this action, or send /cancel to abort.")
-		return true
-	}
-	if aw.PromptMsgID != 0 && msg.ReplyToMessage.ID != aw.PromptMsgID && msg.ReplyToMessage.ID != a.TreeState.GetUserMessageID(userID) {
-		a.showStatus(ctx, b, chatID, userID, "Please reply directly to the prompt message.")
-		return true
 	}
 
 	switch aw.Action {
@@ -1409,6 +1394,7 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 					RichMessage: models.InputRichMessage{
 						HTML: fmt.Sprintf("<p>File <code>%s</code> content updated successfully.</p>", html.EscapeString(uploadedName)),
 					},
+					ReplyMarkup: a.currentReplyMarkup(userID),
 				})
 				return sErr
 			})
@@ -1434,6 +1420,7 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 				RichMessage: models.InputRichMessage{
 					HTML: richHTML,
 				},
+				ReplyMarkup: a.currentReplyMarkup(userID),
 			})
 			return sErr
 		})
@@ -1456,6 +1443,7 @@ func (a *App) handleTreeEditInput(ctx context.Context, b *bot.Bot, chatID, userI
 				RichMessage: models.InputRichMessage{
 					HTML: fmt.Sprintf("<p>File <code>%s</code> content updated successfully.</p>", html.EscapeString(filepath.Base(aw.TargetPath))),
 				},
+				ReplyMarkup: a.currentReplyMarkup(userID),
 			})
 			return sErr
 		})
@@ -1500,6 +1488,7 @@ func (a *App) handleTreeRenameInput(ctx context.Context, b *bot.Bot, chatID, use
 				RichMessage: models.InputRichMessage{
 					HTML: fmt.Sprintf("<p>File renamed to <code>%s</code>.</p>", html.EscapeString(rawName)),
 				},
+				ReplyMarkup: a.currentReplyMarkup(userID),
 			})
 			return sErr
 		})
@@ -1541,6 +1530,7 @@ func (a *App) handleTreeRenameInput(ctx context.Context, b *bot.Bot, chatID, use
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.currentReplyMarkup(userID),
 		})
 		return sErr
 	})
