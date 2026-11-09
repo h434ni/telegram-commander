@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -2220,4 +2221,111 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	srv.mu.Unlock()
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Unknown option. Use /start to open the menu.")
+}
+
+func TestTreeAdvDlIntegration(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	tempDir := t.TempDir()
+	gitRepoDir := filepath.Join(tempDir, "my-git-app")
+	require.NoError(t, os.Mkdir(gitRepoDir, 0o755))
+
+	cmdInit := exec.Command("git", "init")
+	cmdInit.Dir = gitRepoDir
+	require.NoError(t, cmdInit.Run())
+
+	cmdUser := exec.Command("git", "config", "user.name", "Tester")
+	cmdUser.Dir = gitRepoDir
+	require.NoError(t, cmdUser.Run())
+	cmdEmail := exec.Command("git", "config", "user.email", "tester@example.com")
+	cmdEmail.Dir = gitRepoDir
+	require.NoError(t, cmdEmail.Run())
+
+	require.NoError(t, os.WriteFile(filepath.Join(gitRepoDir, "main.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(gitRepoDir, ".gitignore"), []byte("ignored.log\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(gitRepoDir, "ignored.log"), []byte("secret log"), 0o644))
+
+	cmdAdd := exec.Command("git", "add", "main.go", ".gitignore")
+	cmdAdd.Dir = gitRepoDir
+	require.NoError(t, cmdAdd.Run())
+
+	cmdCommit := exec.Command("git", "commit", "-m", "initial commit")
+	cmdCommit.Dir = gitRepoDir
+	require.NoError(t, cmdCommit.Run())
+
+	regularDir := filepath.Join(tempDir, "regular-folder")
+	require.NoError(t, os.Mkdir(regularDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(regularDir, "file.txt"), []byte("content"), 0o644))
+
+	srv := &apiServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			API:          ts.URL,
+			BotToken:     "123:ABC",
+			AllowedUsers: []string{"42"},
+		},
+		Menu: []config.ButtonNode{
+			{
+				Name:     "tg-tree",
+				Type:     "button",
+				Function: "tg-tree",
+				Path:     tempDir,
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	reg := function.NewRegistry()
+	app := bot.NewApp(cfg, reg, &executor.FakeExecutor{}, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, ts.Client()),
+		tgbot.WithServerURL(ts.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	// 1. Start tree explorer
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+
+	tokGit := app.TreeState.GetToken(gitRepoDir)
+	tokReg := app.TreeState.GetToken(regularDir)
+
+	// 2. Select git repo folder
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokGit))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg := msgs[len(msgs)-1]
+
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">download folder</tg-button>`, tokGit))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:gzip:%s">adv dl</tg-button>`, tokGit))
+
+	// 3. Click adv dl button on git folder
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:gzip:"+tokGit))
+
+	srv.mu.Lock()
+	require.NotEmpty(t, srv.documents)
+	lastDoc := srv.documents[len(srv.documents)-1]
+	srv.mu.Unlock()
+
+	require.Equal(t, "my-git-app.zip", lastDoc["filename"])
+	require.Greater(t, lastDoc["size"].(int), 0)
+
+	// 4. Test clicking adv dl on folder without git
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:gzip:"+tokReg))
+	srv.mu.Lock()
+	lastAns := srv.callbackAnswers[len(srv.callbackAnswers)-1]
+	srv.mu.Unlock()
+	require.Contains(t, lastAns["text"], "not a git repository")
 }

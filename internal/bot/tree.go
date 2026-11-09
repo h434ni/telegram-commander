@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ const (
 	cbTreeFile   = "t:file:"
 	cbTreeSend   = "t:send:"
 	cbTreeZip    = "t:zip:"
+	cbTreeGitZip = "t:gzip:"
 	cbTreeEdit   = "t:edit:"
 	cbTreeRen    = "t:ren:"
 	cbTreeRfeY   = "t:rfe:y:"
@@ -674,6 +676,100 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			a.showStatus(ctx, b, chatID, cq.From.ID, "Failed to send zip: "+sendErr.Error())
 		}
 
+	case strings.HasPrefix(data, cbTreeGitZip):
+		tok := strings.TrimPrefix(data, cbTreeGitZip)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Directory reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Cannot access directory: " + err.Error(),
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if !fi.IsDir() {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is not a directory.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		if !hasGit(targetPath) {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Target is not a git repository.",
+					ShowAlert:       true,
+				})
+				return aErr
+			})
+			return
+		}
+
+		ansErr := a.telegramCall(ctx, chatID, func() error {
+			_, aErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return aErr
+		})
+		if ansErr != nil {
+			a.Log.Error("AnswerCallbackQuery error in cbTreeGitZip", "err", ansErr, "cq_id", cq.ID)
+		} else {
+			a.Log.Info("AnswerCallbackQuery success in cbTreeGitZip", "cq_id", cq.ID)
+		}
+
+		zipData, err := createGitZipArchive(ctx, targetPath, maxFileSendSize)
+		if err != nil {
+			a.Log.Error("failed to create git zip archive", "path", targetPath, "err", err)
+			alertText := "Failed to zip directory: " + err.Error()
+			if strings.Contains(err.Error(), "exceeds maximum size") {
+				alertText = fmt.Sprintf("Folder is too large (> %d MB).", maxFileSendSize/(1024*1024))
+			} else if strings.Contains(err.Error(), "no commits found") {
+				alertText = "No git commits found in repository."
+			}
+			a.showStatus(ctx, b, chatID, cq.From.ID, alertText)
+			return
+		}
+
+		zipFilename := filepath.Base(targetPath) + ".zip"
+		params := &bot.SendDocumentParams{
+			ChatID: chatID,
+		}
+		sendErr := a.telegramCall(ctx, chatID, func() error {
+			params.Document = &models.InputFileUpload{
+				Filename: zipFilename,
+				Data:     bytes.NewReader(zipData),
+			}
+			_, sErr := b.SendDocument(ctx, params)
+			return sErr
+		})
+		if sendErr != nil {
+			a.Log.Error("failed to send git folder zip document", "path", targetPath, "err", sendErr)
+			a.showStatus(ctx, b, chatID, cq.From.ID, "Failed to send zip: "+sendErr.Error())
+		}
+
 	case strings.HasPrefix(data, cbTreeSend):
 		tok := strings.TrimPrefix(data, cbTreeSend)
 		targetPath := a.TreeState.GetPath(tok)
@@ -1230,6 +1326,9 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 				html.EscapeString(sel), copyButtonLabel(sel)))
 			if fi.IsDir() {
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download folder</tg-button>\n", tok))
+				if hasGit(sel) {
+					sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:gzip:%s\">adv dl</tg-button>\n", tok))
+				}
 				sb.WriteString("</tg-button-row>")
 			} else {
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
@@ -1491,6 +1590,68 @@ func createZipArchive(targetPath string, maxBytes int64) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// hasGit checks whether dir contains a .git directory or file in its root.
+func hasGit(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && fi != nil
+}
+
+// createGitZipArchive creates a zip archive using git archive for targetPath up to maxBytes.
+func createGitZipArchive(ctx context.Context, targetPath string, maxBytes int64) ([]byte, error) {
+	baseDir := filepath.Base(targetPath)
+	prefix := ""
+	if baseDir != "/" && baseDir != "." {
+		prefix = baseDir + "/"
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "archive", "--format=zip", "--prefix="+prefix, "HEAD")
+	cmd.Dir = targetPath
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open stdout pipe: %w", err)
+	}
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start git archive: %w", err)
+	}
+
+	limited := io.LimitReader(stdoutPipe, maxBytes+1)
+	zipData, readErr := io.ReadAll(limited)
+	if readErr != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("failed to read git archive stream: %w", readErr)
+	}
+
+	if int64(len(zipData)) > maxBytes {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("archive exceeds maximum size (%d MB)", maxBytes/(1024*1024))
+	}
+
+	if err := cmd.Wait(); err != nil {
+		errStr := strings.TrimSpace(stderr.String())
+		lowerErr := strings.ToLower(errStr)
+		if strings.Contains(lowerErr, "not a valid object name") || strings.Contains(lowerErr, "unknown revision") {
+			return nil, fmt.Errorf("no commits found in repository")
+		}
+		if errStr != "" {
+			return nil, fmt.Errorf("git archive failed: %s", errStr)
+		}
+		return nil, fmt.Errorf("git archive failed: %w", err)
+	}
+
+	return zipData, nil
 }
 
 // handleTreeMessage checks if user is awaiting tree input (edit/rename) and processes it.

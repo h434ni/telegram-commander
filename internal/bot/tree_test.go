@@ -1,8 +1,13 @@
 package bot
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -163,6 +168,115 @@ func TestCreateZipArchive(t *testing.T) {
 	data, err := createZipArchive(sub, 10*1024*1024)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
+}
+
+func TestHasGit(t *testing.T) {
+	tempDir := t.TempDir()
+	require.False(t, hasGit(tempDir))
+
+	gitDir := filepath.Join(tempDir, ".git")
+	require.NoError(t, os.Mkdir(gitDir, 0o755))
+	require.True(t, hasGit(tempDir))
+
+	tempDir2 := t.TempDir()
+	gitFile := filepath.Join(tempDir2, ".git")
+	require.NoError(t, os.WriteFile(gitFile, []byte("gitdir: /path/to/worktree\n"), 0o644))
+	require.True(t, hasGit(tempDir2))
+}
+
+func TestCreateGitZipArchive(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found in PATH")
+	}
+
+	tempDir := t.TempDir()
+	repoDir := filepath.Join(tempDir, "myrepo")
+	require.NoError(t, os.Mkdir(repoDir, 0o755))
+
+	// git init
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repoDir
+	require.NoError(t, cmd.Run())
+
+	// Configure dummy git user
+	cmdUser := exec.Command("git", "config", "user.name", "Tester")
+	cmdUser.Dir = repoDir
+	require.NoError(t, cmdUser.Run())
+	cmdEmail := exec.Command("git", "config", "user.email", "tester@example.com")
+	cmdEmail.Dir = repoDir
+	require.NoError(t, cmdEmail.Run())
+
+	// Test repo without commits returns friendly error
+	_, err := createGitZipArchive(context.Background(), repoDir, 10*1024*1024)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no commits found")
+
+	// Add tracked file and gitignore
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "tracked.txt"), []byte("tracked-content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("ignored.txt\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "ignored.txt"), []byte("ignored-content"), 0o644))
+
+	cmdAdd := exec.Command("git", "add", "tracked.txt", ".gitignore")
+	cmdAdd.Dir = repoDir
+	require.NoError(t, cmdAdd.Run())
+
+	cmdCommit := exec.Command("git", "commit", "-m", "init commit")
+	cmdCommit.Dir = repoDir
+	require.NoError(t, cmdCommit.Run())
+
+	// Archive git repo
+	zipData, err := createGitZipArchive(context.Background(), repoDir, 10*1024*1024)
+	require.NoError(t, err)
+	require.NotEmpty(t, zipData)
+
+	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, f := range zr.File {
+		names[f.Name] = true
+	}
+
+	// Should contain tracked.txt and .gitignore with prefix myrepo/
+	require.True(t, names["myrepo/tracked.txt"], "tracked.txt should be in zip")
+	require.True(t, names["myrepo/.gitignore"], ".gitignore should be in zip")
+	// Should NOT contain ignored.txt
+	require.False(t, names["myrepo/ignored.txt"], "ignored.txt must be ignored")
+	// Should NOT contain .git
+	for name := range names {
+		require.False(t, strings.Contains(name, ".git/"), ".git internal directory must not be in archive")
+	}
+}
+
+func TestTreeAdvDlButton_Presence(t *testing.T) {
+	tempDir := t.TempDir()
+	app := &App{
+		TreeState: NewTreeStateManager(tempDir),
+	}
+
+	folderNoGit := filepath.Join(tempDir, "plain")
+	require.NoError(t, os.Mkdir(folderNoGit, 0o755))
+
+	folderWithGit := filepath.Join(tempDir, "gitrepo")
+	require.NoError(t, os.Mkdir(folderWithGit, 0o755))
+	require.NoError(t, os.Mkdir(filepath.Join(folderWithGit, ".git"), 0o755))
+
+	tokNoGit := app.TreeState.GetToken(folderNoGit)
+	tokWithGit := app.TreeState.GetToken(folderWithGit)
+
+	// Select folder without git: download folder is shown, adv dl is NOT shown
+	app.TreeState.SetSelectedItem(1, folderNoGit)
+	htmlNoGit, err := app.buildTreeRichMessageHTML(tempDir, 1)
+	require.NoError(t, err)
+	require.Contains(t, htmlNoGit, `data="t:zip:`+tokNoGit+`">download folder</tg-button>`)
+	require.NotContains(t, htmlNoGit, `adv dl`)
+
+	// Select folder with git: download folder AND adv dl are shown
+	app.TreeState.SetSelectedItem(1, folderWithGit)
+	htmlWithGit, err := app.buildTreeRichMessageHTML(tempDir, 1)
+	require.NoError(t, err)
+	require.Contains(t, htmlWithGit, `data="t:zip:`+tokWithGit+`">download folder</tg-button>`)
+	require.Contains(t, htmlWithGit, `data="t:gzip:`+tokWithGit+`">adv dl</tg-button>`)
 }
 
 func TestBuildFileRichMessageHTML(t *testing.T) {
