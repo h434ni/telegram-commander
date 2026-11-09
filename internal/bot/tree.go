@@ -293,28 +293,51 @@ func (a *App) isTreeButton(node *Node) bool {
 // startTreeExplorer initiates the tree explorer message.
 func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node) {
 	startPath := ""
-	if node.Path != "" {
-		startPath = node.Path
-	} else if p, ok := node.Raw.Params["path"]; ok && p != "" {
-		startPath = p
-	} else if node.WorkDir != "" {
-		startPath = node.WorkDir
-	} else if a.Cfg.WorkDir != "" {
-		startPath = a.Cfg.WorkDir
-	} else {
-		startPath = a.TreeState.Home()
+	if node != nil {
+		if node.Path != "" {
+			startPath = node.Path
+		} else if p, ok := node.Raw.Params["path"]; ok && p != "" {
+			startPath = p
+		} else if node.WorkDir != "" {
+			startPath = node.WorkDir
+		}
+	}
+	if startPath == "" {
+		if a.Cfg.WorkDir != "" {
+			startPath = a.Cfg.WorkDir
+		} else {
+			startPath = a.TreeState.Home()
+		}
 	}
 
-	absPath, err := filepath.Abs(startPath)
+	a.openTreeAtPath(ctx, b, chatID, user, startPath)
+}
+
+// openTreeAtPath opens the folder explorer at a specific file or directory path.
+func (a *App) openTreeAtPath(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, targetPath string) {
+	absPath, err := filepath.Abs(targetPath)
 	if err != nil {
 		a.showStatus(ctx, b, chatID, user.ID, "Invalid path: "+err.Error())
 		return
 	}
 
+	fi, err := os.Stat(absPath)
+	if err != nil {
+		a.showStatus(ctx, b, chatID, user.ID, "Cannot open path: "+err.Error())
+		return
+	}
+
+	dirPath := absPath
+	selectedItem := ""
+	if !fi.IsDir() {
+		dirPath = filepath.Dir(absPath)
+		selectedItem = absPath
+	}
+
 	a.TreeState.ClearExpanded(user.ID)
-	a.TreeState.SetSelectedFolder(user.ID, "")
-	a.TreeState.SetUserPath(user.ID, absPath)
-	richHTML, err := a.buildTreeRichMessageHTML(absPath, user.ID)
+	a.TreeState.SetSelectedFolder(user.ID, selectedItem)
+	a.TreeState.SetUserPath(user.ID, dirPath)
+	richHTML, err := a.buildTreeRichMessageHTML(dirPath, user.ID)
 	if err != nil {
 		a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
 		return
@@ -332,6 +355,106 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 		}
 		return sendErr
 	})
+}
+
+// resolvePathCandidate inspects an input text and resolves it against home and active user path.
+// It returns (resolvedPath, isExplicitPath, ok).
+func (a *App) resolvePathCandidate(raw string, userID int64) (string, bool, bool) {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.Trim(trimmed, "\"'`")
+	trimmed = strings.TrimPrefix(trimmed, "cd ")
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		return "", false, false
+	}
+
+	home := ""
+	if a.TreeState != nil {
+		home = a.TreeState.Home()
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+
+	isExplicit := false
+	var target string
+
+	switch {
+	case trimmed == "~":
+		target = home
+		isExplicit = true
+	case strings.HasPrefix(trimmed, "~/") || strings.HasPrefix(trimmed, "~\\"):
+		target = filepath.Join(home, trimmed[2:])
+		isExplicit = true
+	case filepath.IsAbs(trimmed):
+		target = filepath.Clean(trimmed)
+		if strings.Count(trimmed, "/") > 1 || strings.HasSuffix(trimmed, "/") || strings.Count(trimmed, "\\") > 1 || strings.HasSuffix(trimmed, "\\") {
+			isExplicit = true
+		}
+	default:
+		baseDir := ""
+		if a.TreeState != nil {
+			baseDir = a.TreeState.GetUserPath(userID)
+		}
+		if baseDir == "" {
+			if a.Cfg != nil && a.Cfg.WorkDir != "" {
+				baseDir = a.Cfg.WorkDir
+			} else {
+				baseDir = home
+			}
+		}
+
+		if strings.HasPrefix(trimmed, "./") || strings.HasPrefix(trimmed, "../") ||
+			strings.HasPrefix(trimmed, ".\\") || strings.HasPrefix(trimmed, "..\\") ||
+			strings.Contains(trimmed, "/") || strings.Contains(trimmed, "\\") ||
+			trimmed == "." || trimmed == ".." {
+			isExplicit = true
+		}
+
+		cand1 := filepath.Join(baseDir, trimmed)
+		if _, err := os.Stat(cand1); err == nil {
+			target = filepath.Clean(cand1)
+			break
+		}
+
+		cand2, err := filepath.Abs(trimmed)
+		if err == nil {
+			if _, err := os.Stat(cand2); err == nil {
+				target = filepath.Clean(cand2)
+				break
+			}
+		}
+
+		if isExplicit {
+			target = filepath.Clean(cand1)
+			break
+		}
+
+		return "", false, false
+	}
+
+	return target, isExplicit, true
+}
+
+// tryOpenTreePath checks if text represents a path, and if so opens the tree explorer.
+// Returns true if handled.
+func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, text string) bool {
+	target, isExplicit, ok := a.resolvePathCandidate(text, user.ID)
+	if !ok || target == "" {
+		return false
+	}
+
+	_, err := os.Stat(target)
+	if err != nil {
+		if isExplicit {
+			a.showStatus(ctx, b, chatID, user.ID, fmt.Sprintf("Path does not exist: %s", target))
+			return true
+		}
+		return false
+	}
+
+	a.openTreeAtPath(ctx, b, chatID, user, target)
+	return true
 }
 
 // handleTreeCallback handles callback queries originating from in-message <tg-button> elements.
@@ -360,6 +483,8 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 
 	case data == cbTreeHome:
 		a.TreeState.ClearExpanded(cq.From.ID)
+		a.TreeState.SetSelectedFolder(cq.From.ID, "")
+		a.TreeState.SetUserPath(cq.From.ID, a.TreeState.Home())
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,

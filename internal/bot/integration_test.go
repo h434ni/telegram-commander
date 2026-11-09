@@ -2102,3 +2102,122 @@ func TestTreeEditMessageText_FallbackWhenUneditable(t *testing.T) {
 	require.Contains(t, lastMsg, "hello.txt")
 	require.Contains(t, lastMsg, "file operations:")
 }
+
+func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "subfolder")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	fileInSub := filepath.Join(subDir, "inner.txt")
+	require.NoError(t, os.WriteFile(fileInSub, []byte("hello"), 0o644))
+
+	srv := &apiServer{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			BotToken:     "test-token",
+			API:          server.URL,
+			AllowedUsers: []string{"42", "admin"},
+		},
+		WorkDir: tempDir,
+		Menu: []config.ButtonNode{
+			{Name: "tg-tree", Type: "button", Function: "tg-tree", Path: tempDir},
+		},
+	}
+	cfg.ApplyDefaults()
+	app := bot.NewApp(cfg, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, server.Client()),
+		tgbot.WithServerURL(server.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 1. Send uncaught directory path message (absolute path)
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", subDir))
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	require.NotEmpty(t, msgs)
+	lastMsg := msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "inner.txt")
+
+	// 2. Send uncaught file path message: opens parent dir and selects file
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", fileInSub))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, "file operations:")
+	require.Contains(t, lastMsg, "download file")
+	require.Contains(t, lastMsg, "rename")
+	require.Contains(t, lastMsg, "edit")
+
+	// 2b. Send path with quotes/backticks
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "`"+subDir+"`"))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "inner.txt")
+
+	// 2c. Send path with cd prefix
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "cd "+subDir))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "inner.txt")
+
+	// 2d. Send relative path 'inner.txt' while browsing subfolder
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "inner.txt"))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, "file operations:")
+
+	// 2e. Send '..' to navigate back to parent folder
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", ".."))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "subfolder")
+
+	// 3. Send non-existent explicit path: shows "Path does not exist"
+	missingPath := filepath.Join(tempDir, "missing", "dir")
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", missingPath))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Path does not exist:")
+
+	// 4. Send unknown command: shows "Use /start"
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "/unknown_cmd"))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Use /start to open the menu.")
+
+	// 5. Send random unknown text: shows "Unknown option"
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "some unknown text"))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Unknown option. Use /start to open the menu.")
+}

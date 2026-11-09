@@ -394,11 +394,6 @@ func (a *App) handleMenuText(ctx context.Context, b *bot.Bot, msg *models.Messag
 		return
 	}
 
-	if strings.HasPrefix(text, "/") {
-		a.showStatus(ctx, b, chatID, userID, "Use /start to open the menu.")
-		return
-	}
-
 	switch text {
 	case btnPrev:
 		a.applyAction(ctx, b, chatID, msg.From, cbPrev)
@@ -417,6 +412,13 @@ func (a *App) handleMenuText(ctx context.Context, b *bot.Bot, msg *models.Messag
 	st := a.getNav(userID)
 	node := a.Index.ChildByLabel(st.nodeID, text)
 	if node == nil {
+		if a.tryOpenTreePath(ctx, b, chatID, msg.From, text) {
+			return
+		}
+		if strings.HasPrefix(text, "/") {
+			a.showStatus(ctx, b, chatID, userID, "Use /start to open the menu.")
+			return
+		}
 		a.showStatus(ctx, b, chatID, userID, "Unknown option. Use /start to open the menu.")
 		return
 	}
