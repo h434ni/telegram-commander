@@ -411,6 +411,7 @@ func TestBuildTreeRichMessageHTML_RootVisibleAndBackButton(t *testing.T) {
 	// 3. Action buttons for targetdir
 	require.Contains(t, html, "copy full path")
 	require.Contains(t, html, "download folder")
-	// 4. Separator line and transparent back button at the end
-	require.Contains(t, html, "<hr/>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n</tg-button-row>")
+	// 4. Transparent back button right after the tree without additional separator line
+	require.Contains(t, html, "</p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n</tg-button-row>")
+	require.True(t, strings.Index(html, `data="t:home">back</tg-button>`) < strings.Index(html, "copy full path"), "back button should appear before action buttons")
 }

@@ -1483,6 +1483,12 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	}
 	sb.WriteString("</p>\n")
 
+	if a.shouldShowBackButton(userID, cleanPath) {
+		sb.WriteString("<tg-button-row align=\"left\">\n")
+		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n")
+		sb.WriteString("</tg-button-row>\n")
+	}
+
 	// If an item (folder or file) has been clicked, add action buttons in a row preceded by a divider line
 	if sel := a.TreeState.GetSelectedItem(userID); sel != "" {
 		if fi, err := os.Stat(sel); err == nil {
@@ -1514,13 +1520,6 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 				sb.WriteString("</tg-button-row>\n")
 			}
 		}
-	}
-
-	if a.shouldShowBackButton(userID, cleanPath) {
-		sb.WriteString("<hr/>\n")
-		sb.WriteString("<tg-button-row align=\"left\">\n")
-		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n")
-		sb.WriteString("</tg-button-row>")
 	}
 
 	return sb.String(), nil

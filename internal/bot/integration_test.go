@@ -2148,8 +2148,8 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	require.Contains(t, lastMsg, ">subfolder/</tg-button> 👈<br/>")
 	require.Contains(t, lastMsg, "inner.txt")
 	require.Contains(t, lastMsg, "download folder")
-	require.Contains(t, lastMsg, "<hr/>")
 	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">back</tg-button>`)
+	require.True(t, strings.Index(lastMsg, `data="t:home">back</tg-button>`) < strings.Index(lastMsg, "download folder"), "back button should appear before action buttons")
 
 	// 1b. Clicking back returns to default directory
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:home"))
@@ -2174,6 +2174,7 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	require.Contains(t, lastMsg, "rename")
 	require.Contains(t, lastMsg, "edit")
 	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">back</tg-button>`)
+	require.True(t, strings.Index(lastMsg, `data="t:home">back</tg-button>`) < strings.Index(lastMsg, "file operations:"), "back button should appear before file operations")
 
 	// 2b. Send path with quotes/backticks
 	b.ProcessUpdate(ctx, textUpdate(42, "admin", "`"+subDir+"`"))
