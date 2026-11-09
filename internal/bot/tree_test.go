@@ -385,3 +385,32 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	// Children of alphaLast get "│\u00a0\u00a0└" (2 spaces after │), never just 1 space
 	require.Contains(t, htmlAlpha, "│\u00a0\u00a0└<tg-button type=\"callback_data\" data=\"t:file:"+tokLeaf+"\">leaf.txt</tg-button><br/>")
 }
+
+func TestBuildTreeRichMessageHTML_RootVisibleAndBackButton(t *testing.T) {
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "targetdir")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	innerFile := filepath.Join(subDir, "inner.txt")
+	require.NoError(t, os.WriteFile(innerFile, []byte("data"), 0o644))
+
+	app := NewApp(&config.Config{}, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	app.TreeState.SetDefaultPath(42, tempDir)
+	app.TreeState.SetRootFolderVisible(42, true)
+	app.TreeState.SetExpanded(42, subDir, true)
+	app.TreeState.SetSelectedFolder(42, subDir)
+	app.TreeState.SetUserPath(42, subDir)
+
+	html, err := app.buildTreeRichMessageHTML(subDir, 42)
+	require.NoError(t, err)
+
+	tokSub := app.TreeState.GetToken(subDir)
+	// 1. Root folder is rendered on top with 👈
+	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">targetdir/</tg-button> 👈<br/>`)
+	// 2. Child items are listed under it
+	require.Contains(t, html, "inner.txt")
+	// 3. Action buttons for targetdir
+	require.Contains(t, html, "copy full path")
+	require.Contains(t, html, "download folder")
+	// 4. Separator line and transparent back button at the end
+	require.Contains(t, html, "<hr/>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n</tg-button-row>")
+}

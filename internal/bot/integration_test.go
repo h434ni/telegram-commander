@@ -2145,20 +2145,35 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	require.NotEmpty(t, msgs)
 	lastMsg := msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, ">subfolder/</tg-button> 👈<br/>")
 	require.Contains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, "download folder")
+	require.Contains(t, lastMsg, "<hr/>")
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">back</tg-button>`)
 
-	// 2. Send uncaught file path message: opens parent dir and selects file
+	// 1b. Clicking back returns to default directory
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:home"))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.NotContains(t, lastMsg, `data="t:home">back</tg-button>`)
+
+	// 2. Send uncaught file path message: opens parent dir as root and selects file
 	b.ProcessUpdate(ctx, textUpdate(42, "admin", fileInSub))
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
 	srv.mu.Unlock()
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
-	require.Contains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, ">subfolder/</tg-button><br/>")
+	require.Contains(t, lastMsg, ">inner.txt</tg-button> 👈<br/>")
 	require.Contains(t, lastMsg, "file operations:")
 	require.Contains(t, lastMsg, "download file")
 	require.Contains(t, lastMsg, "rename")
 	require.Contains(t, lastMsg, "edit")
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">back</tg-button>`)
 
 	// 2b. Send path with quotes/backticks
 	b.ProcessUpdate(ctx, textUpdate(42, "admin", "`"+subDir+"`"))

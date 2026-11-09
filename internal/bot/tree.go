@@ -69,6 +69,8 @@ type TreeStateManager struct {
 	expanded      map[int64]map[string]bool // userID -> set of expanded clean paths
 	selectedItems map[int64]string          // userID -> last clicked folder or file path
 	awaiting      map[int64]TreeAwaiting    // userID -> pending edit/rename action
+	defaultPaths  map[int64]string          // userID -> default directory path
+	rootVisible   map[int64]bool            // userID -> whether root folder itself is shown
 	homePath      string
 }
 
@@ -92,6 +94,8 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		expanded:      make(map[int64]map[string]bool),
 		selectedItems: make(map[int64]string),
 		awaiting:      make(map[int64]TreeAwaiting),
+		defaultPaths:  make(map[int64]string),
+		rootVisible:   make(map[int64]bool),
 		homePath:      filepath.Clean(home),
 	}
 }
@@ -187,6 +191,56 @@ func (m *TreeStateManager) IsExpanded(userID int64, path string) bool {
 		return false
 	}
 	return userExp[filepath.Clean(path)]
+}
+
+// SetExpanded sets whether a folder is expanded for userID.
+func (m *TreeStateManager) SetExpanded(userID int64, path string, open bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	userExp, ok := m.expanded[userID]
+	if !ok {
+		userExp = make(map[string]bool)
+		m.expanded[userID] = userExp
+	}
+
+	clean := filepath.Clean(path)
+	if open {
+		userExp[clean] = true
+	} else {
+		delete(userExp, clean)
+	}
+}
+
+// IsRootFolderVisible returns whether the root folder itself is rendered in the tree for userID.
+func (m *TreeStateManager) IsRootFolderVisible(userID int64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.rootVisible[userID]
+}
+
+// SetRootFolderVisible sets whether the root folder itself is rendered in the tree for userID.
+func (m *TreeStateManager) SetRootFolderVisible(userID int64, visible bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rootVisible[userID] = visible
+}
+
+// GetDefaultPath returns the default tree directory for userID.
+func (m *TreeStateManager) GetDefaultPath(userID int64) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if p, ok := m.defaultPaths[userID]; ok && p != "" {
+		return p
+	}
+	return m.homePath
+}
+
+// SetDefaultPath records the default tree directory for userID.
+func (m *TreeStateManager) SetDefaultPath(userID int64, path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.defaultPaths[userID] = filepath.Clean(path)
 }
 
 // ClearExpanded resets all expanded folder states for userID.
@@ -292,6 +346,36 @@ func (a *App) isTreeButton(node *Node) bool {
 	return false
 }
 
+// defaultTreePath returns the directory tg tree opens in by default.
+func (a *App) defaultTreePath() string {
+	if a.Cfg != nil && a.Cfg.WorkDir != "" {
+		return filepath.Clean(a.Cfg.WorkDir)
+	}
+	if a.TreeState != nil && a.TreeState.Home() != "" {
+		return filepath.Clean(a.TreeState.Home())
+	}
+	h, err := os.UserHomeDir()
+	if err == nil && h != "" {
+		return filepath.Clean(h)
+	}
+	return "/home/ec2-user"
+}
+
+// shouldShowBackButton returns whether the transparent back button should be shown.
+func (a *App) shouldShowBackButton(userID int64, curPath string) bool {
+	if a.TreeState == nil {
+		return false
+	}
+	if a.TreeState.IsRootFolderVisible(userID) {
+		return true
+	}
+	defaultDir := a.TreeState.GetDefaultPath(userID)
+	if defaultDir == "" {
+		defaultDir = a.defaultTreePath()
+	}
+	return filepath.Clean(curPath) != filepath.Clean(defaultDir)
+}
+
 // startTreeExplorer initiates the tree explorer message.
 func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, node *Node) {
 	startPath := ""
@@ -305,11 +389,12 @@ func (a *App) startTreeExplorer(ctx context.Context, b *bot.Bot, chatID int64, u
 		}
 	}
 	if startPath == "" {
-		if a.Cfg.WorkDir != "" {
-			startPath = a.Cfg.WorkDir
-		} else {
-			startPath = a.TreeState.Home()
-		}
+		startPath = a.defaultTreePath()
+	}
+
+	if a.TreeState != nil {
+		a.TreeState.SetDefaultPath(user.ID, startPath)
+		a.TreeState.SetRootFolderVisible(user.ID, false)
 	}
 
 	a.openTreeAtPath(ctx, b, chatID, user, startPath)
@@ -446,7 +531,7 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 		return false
 	}
 
-	_, err := os.Stat(target)
+	fi, err := os.Stat(target)
 	if err != nil {
 		if isExplicit {
 			a.showStatus(ctx, b, chatID, user.ID, fmt.Sprintf("Path does not exist: %s", target))
@@ -455,7 +540,69 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 		return false
 	}
 
-	a.openTreeAtPath(ctx, b, chatID, user, target)
+	absPath, err := filepath.Abs(target)
+	if err != nil {
+		a.showStatus(ctx, b, chatID, user.ID, "Invalid path: "+err.Error())
+		return true
+	}
+
+	if a.TreeState != nil {
+		a.TreeState.SetRootFolderVisible(user.ID, true)
+	}
+
+	if fi.IsDir() {
+		cleanDir := filepath.Clean(absPath)
+		a.TreeState.ClearExpanded(user.ID)
+		a.TreeState.SetExpanded(user.ID, cleanDir, true)
+		a.TreeState.SetSelectedFolder(user.ID, cleanDir)
+		a.TreeState.SetUserPath(user.ID, cleanDir)
+
+		richHTML, err := a.buildTreeRichMessageHTML(cleanDir, user.ID)
+		if err != nil {
+			a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
+			return true
+		}
+
+		_ = a.telegramCall(ctx, chatID, func() error {
+			msg, sendErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+				ChatID: chatID,
+				RichMessage: models.InputRichMessage{
+					HTML: richHTML,
+				},
+			})
+			if sendErr == nil && msg != nil {
+				a.TreeState.SetUserMessage(user.ID, msg.ID)
+			}
+			return sendErr
+		})
+		return true
+	}
+
+	cleanFile := filepath.Clean(absPath)
+	parentDir := filepath.Dir(cleanFile)
+	a.TreeState.ClearExpanded(user.ID)
+	a.TreeState.SetExpanded(user.ID, parentDir, true)
+	a.TreeState.SetSelectedFolder(user.ID, cleanFile)
+	a.TreeState.SetUserPath(user.ID, parentDir)
+
+	richHTML, err := a.buildTreeRichMessageHTML(parentDir, user.ID)
+	if err != nil {
+		a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
+		return true
+	}
+
+	_ = a.telegramCall(ctx, chatID, func() error {
+		msg, sendErr := b.SendRichMessage(ctx, &bot.SendRichMessageParams{
+			ChatID: chatID,
+			RichMessage: models.InputRichMessage{
+				HTML: richHTML,
+			},
+		})
+		if sendErr == nil && msg != nil {
+			a.TreeState.SetUserMessage(user.ID, msg.ID)
+		}
+		return sendErr
+	})
 	return true
 }
 
@@ -484,13 +631,18 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 		a.closeTreeExplorer(ctx, b, chatID, cq.From.ID)
 
 	case data == cbTreeHome:
-		a.TreeState.ClearExpanded(cq.From.ID)
-		a.TreeState.SetSelectedFolder(cq.From.ID, "")
-		a.TreeState.SetUserPath(cq.From.ID, a.TreeState.Home())
+		defaultDir := a.defaultTreePath()
+		if a.TreeState != nil {
+			defaultDir = a.TreeState.GetDefaultPath(cq.From.ID)
+			a.TreeState.ClearExpanded(cq.From.ID)
+			a.TreeState.SetSelectedFolder(cq.From.ID, "")
+			a.TreeState.SetUserPath(cq.From.ID, defaultDir)
+			a.TreeState.SetRootFolderVisible(cq.From.ID, false)
+		}
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
-				Text:            "Reset to Home",
+				Text:            "Back to default directory",
 			})
 			return err
 		})
@@ -1307,7 +1459,28 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 
 	sb.WriteString("<p>\n")
 	lineCount := 0
-	a.renderDirTree(&sb, cleanPath, "", userID, &lineCount)
+	if a.TreeState != nil && a.TreeState.IsRootFolderVisible(userID) {
+		tokRoot := a.TreeState.GetToken(cleanPath)
+		isOpen := a.TreeState.IsExpanded(userID, cleanPath)
+		cursor := ""
+		if cleanPath == a.TreeState.GetSelectedItem(userID) {
+			cursor = " 👈"
+		}
+		folderName := filepath.Base(cleanPath)
+		if cleanPath == "/" {
+			folderName = "/"
+		} else if isOpen {
+			folderName += "/"
+		}
+		sb.WriteString(fmt.Sprintf("\u200b<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button>%s<br/>\n",
+			tokRoot, html.EscapeString(folderName), cursor))
+		lineCount++
+		if isOpen {
+			a.renderDirTree(&sb, cleanPath, "", userID, &lineCount)
+		}
+	} else {
+		a.renderDirTree(&sb, cleanPath, "", userID, &lineCount)
+	}
 	sb.WriteString("</p>\n")
 
 	// If an item (folder or file) has been clicked, add action buttons in a row preceded by a divider line
@@ -1329,7 +1502,7 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 				if hasGit(sel) {
 					sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:gzip:%s\">adv dl</tg-button>\n", tok))
 				}
-				sb.WriteString("</tg-button-row>")
+				sb.WriteString("</tg-button-row>\n")
 			} else {
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
 				sb.WriteString("</tg-button-row>\n")
@@ -1338,9 +1511,16 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 				sb.WriteString("<tg-button-row align=\"left\">\n")
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename</tg-button>\n", tok))
 				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit</tg-button>\n", tok))
-				sb.WriteString("</tg-button-row>")
+				sb.WriteString("</tg-button-row>\n")
 			}
 		}
+	}
+
+	if a.shouldShowBackButton(userID, cleanPath) {
+		sb.WriteString("<hr/>\n")
+		sb.WriteString("<tg-button-row align=\"left\">\n")
+		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n")
+		sb.WriteString("</tg-button-row>")
 	}
 
 	return sb.String(), nil
@@ -1467,19 +1647,39 @@ func formatFileSize(bytes int64) string {
 // formatTildePath formats a path starting with ~/ if it resides in home or root.
 func formatTildePath(path, home, root string) string {
 	cleanPath := filepath.Clean(path)
-	for _, base := range []string{root, home} {
-		if base == "" {
-			continue
-		}
-		cleanBase := filepath.Clean(base)
-		if cleanPath == cleanBase {
+	cleanHome := filepath.Clean(home)
+	cleanRoot := filepath.Clean(root)
+
+	if cleanHome != "" && cleanHome != "." {
+		if cleanPath == cleanHome {
 			return "~/"
 		}
-		if strings.HasPrefix(cleanPath, cleanBase+string(filepath.Separator)) {
-			rel := strings.TrimPrefix(cleanPath, cleanBase+string(filepath.Separator))
+		if strings.HasPrefix(cleanPath, cleanHome+string(filepath.Separator)) {
+			if cleanRoot != "" && cleanRoot != "." && cleanRoot != cleanHome && strings.HasPrefix(cleanRoot, cleanHome+string(filepath.Separator)) {
+				if cleanPath == cleanRoot {
+					rel := strings.TrimPrefix(cleanPath, cleanHome+string(filepath.Separator))
+					return "~/" + filepath.ToSlash(rel)
+				}
+				if strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) {
+					rel := strings.TrimPrefix(cleanPath, cleanRoot+string(filepath.Separator))
+					return "~/" + filepath.ToSlash(rel)
+				}
+			}
+			rel := strings.TrimPrefix(cleanPath, cleanHome+string(filepath.Separator))
 			return "~/" + filepath.ToSlash(rel)
 		}
 	}
+
+	if cleanRoot != "" && cleanRoot != "." {
+		if cleanPath == cleanRoot {
+			return "~/"
+		}
+		if strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator)) {
+			rel := strings.TrimPrefix(cleanPath, cleanRoot+string(filepath.Separator))
+			return "~/" + filepath.ToSlash(rel)
+		}
+	}
+
 	return filepath.ToSlash(cleanPath)
 }
 
