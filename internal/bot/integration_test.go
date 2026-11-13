@@ -132,6 +132,7 @@ func (s *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"message_id":   r.FormValue("message_id"),
 			"text":         text,
 			"rich_message": r.FormValue("rich_message"),
+			"reply_markup": r.FormValue("reply_markup"),
 			"kind":         "edit",
 		}
 		s.messages = append(s.messages, m)
@@ -2346,12 +2347,18 @@ func TestTreeAdvDlIntegration(t *testing.T) {
 	require.Contains(t, lastAns["text"], "not a git repository")
 }
 
-func TestTreeToggleShowHiddenIntegration(t *testing.T) {
+func TestTreeToggleShowHiddenAndSettingsIntegration(t *testing.T) {
 	tempDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "visible.txt"), []byte("normal"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".hidden.txt"), []byte("hidden"), 0o644))
-	dotDir := filepath.Join(tempDir, ".dotfolder")
-	require.NoError(t, os.MkdirAll(dotDir, 0o755))
+	subA := filepath.Join(tempDir, "folderA")
+	subB := filepath.Join(tempDir, "folderB")
+	require.NoError(t, os.MkdirAll(subA, 0o755))
+	require.NoError(t, os.MkdirAll(subB, 0o755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(subA, "visibleA.txt"), []byte("normal"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(subA, ".hiddenA.txt"), []byte("hidden"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(subA, ".dotfolder"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(subB, "visibleB.txt"), []byte("normalB"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(subB, ".hiddenB.txt"), []byte("hiddenB"), 0o644))
 
 	srv := &apiServer{}
 	ts := httptest.NewServer(srv)
@@ -2391,19 +2398,31 @@ func TestTreeToggleShowHiddenIntegration(t *testing.T) {
 	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
 	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
 
+	tokA := app.TreeState.GetToken(subA)
+	tokB := app.TreeState.GetToken(subB)
+
+	// Open folderA and folderB, ending with folderA selected
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokB))
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokA))
+
 	srv.mu.Lock()
 	msgs := visibleTexts(srv)
 	srv.mu.Unlock()
 	lastMsg := msgs[len(msgs)-1]
 
 	require.Contains(t, lastMsg, "Folder Explorer")
-	require.Contains(t, lastMsg, "visible.txt")
-	require.NotContains(t, lastMsg, ".hidden.txt")
+	require.Contains(t, lastMsg, "visibleA.txt")
+	require.NotContains(t, lastMsg, ".hiddenA.txt")
 	require.NotContains(t, lastMsg, ".dotfolder")
-	require.Contains(t, lastMsg, `data="t:hid">show hidden</tg-button>`)
+	require.Contains(t, lastMsg, "visibleB.txt")
+	require.NotContains(t, lastMsg, ".hiddenB.txt")
+	// Settings button is transparent right after the tree
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:cfg">⚙</tg-button>`)
+	// Per-folder show hidden button is in the folder action section
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="success" data="t:hid:`+tokA+`">show hidden</tg-button>`)
 
-	// 2. Click "show hidden"
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid"))
+	// 2. Click "show hidden" for folderA
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid:"+tokA))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -2412,13 +2431,15 @@ func TestTreeToggleShowHiddenIntegration(t *testing.T) {
 
 	require.Contains(t, lastAns["text"], "Showing hidden files")
 	lastMsg = msgs[len(msgs)-1]
-	require.Contains(t, lastMsg, "visible.txt")
-	require.Contains(t, lastMsg, ".hidden.txt")
+	require.Contains(t, lastMsg, "visibleA.txt")
+	require.Contains(t, lastMsg, ".hiddenA.txt")
 	require.Contains(t, lastMsg, ".dotfolder")
-	require.Contains(t, lastMsg, `data="t:hid">hide hidden</tg-button>`)
+	// folderB still hides its hidden files!
+	require.NotContains(t, lastMsg, ".hiddenB.txt")
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="success" data="t:hid:`+tokA+`">hide hidden</tg-button>`)
 
-	// 3. Click "hide hidden"
-	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid"))
+	// 3. Click "hide hidden" for folderA
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid:"+tokA))
 
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
@@ -2427,8 +2448,60 @@ func TestTreeToggleShowHiddenIntegration(t *testing.T) {
 
 	require.Contains(t, lastAns["text"], "Hiding hidden files")
 	lastMsg = msgs[len(msgs)-1]
-	require.Contains(t, lastMsg, "visible.txt")
-	require.NotContains(t, lastMsg, ".hidden.txt")
+	require.Contains(t, lastMsg, "visibleA.txt")
+	require.NotContains(t, lastMsg, ".hiddenA.txt")
 	require.NotContains(t, lastMsg, ".dotfolder")
-	require.Contains(t, lastMsg, `data="t:hid">show hidden</tg-button>`)
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="success" data="t:hid:`+tokA+`">show hidden</tg-button>`)
+
+	// 4. Click ⚙ button (t:cfg) to open settings inline keyboard
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cfg"))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	lastRaw := srv.messages[len(srv.messages)-1]
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	// ⚙ button is now blue (style="primary")
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="primary" data="t:cfg">⚙</tg-button>`)
+	// Inline keyboard contains "Button style: names" (default)
+	require.Contains(t, fmt.Sprint(lastRaw["reply_markup"]), `"text":"Button style: names"`)
+	require.Contains(t, fmt.Sprint(lastRaw["reply_markup"]), `"callback_data":"t:style"`)
+
+	// 5. Click "Button style: names" inline keyboard button (t:style) to switch to emoji mode
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:style"))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	lastRaw = srv.messages[len(srv.messages)-1]
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	// Inline keyboard button now says "Button style: emoji"
+	require.Contains(t, fmt.Sprint(lastRaw["reply_markup"]), `"text":"Button style: emoji"`)
+	// Action buttons are now emojis only
+	require.Contains(t, lastMsg, `>📋</tg-button>`)
+	require.Contains(t, lastMsg, `data="t:zip:`+tokA+`">📥</tg-button>`)
+	require.Contains(t, lastMsg, `data="t:hid:`+tokA+`">👁</tg-button>`)
+
+	// 6. Click ⚙ button again to hide settings inline keyboard
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cfg"))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	lastRaw = srv.messages[len(srv.messages)-1]
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	// ⚙ button is transparent again
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:cfg">⚙</tg-button>`)
+	require.Empty(t, fmt.Sprint(lastRaw["reply_markup"]))
+
+	// 7. Reopen tg-tree in the future: global emoji setting persists across new tree messages!
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", subA))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, `data="t:home">🔙</tg-button>`)
+	require.Contains(t, lastMsg, `>📋</tg-button>`)
+	require.Contains(t, lastMsg, `data="t:zip:`+tokA+`">📥</tg-button>`)
+	require.Contains(t, lastMsg, `data="t:hid:`+tokA+`">👁</tg-button>`)
 }

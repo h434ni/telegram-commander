@@ -35,7 +35,9 @@ const (
 	cbTreeRfdY   = "t:rfd:y:"
 	cbTreeRfdN   = "t:rfd:n:"
 	cbTreeHome   = "t:home"
-	cbTreeHid    = "t:hid"
+	cbTreeHid    = "t:hid:"
+	cbTreeCfg    = "t:cfg"
+	cbTreeStyle  = "t:style"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
 
@@ -61,19 +63,21 @@ type TreeAwaiting struct {
 
 // TreeStateManager maps directory paths to tokens and tracks expanded state per user.
 type TreeStateManager struct {
-	mu            sync.RWMutex
-	rnd           *rand.Rand
-	paths         map[string]string         // token -> path
-	tokens        map[string]string         // path -> token
-	userPaths     map[int64]string          // userID -> root path
-	userMessages  map[int64]int             // userID -> message ID of active tree
-	expanded      map[int64]map[string]bool // userID -> set of expanded clean paths
-	selectedItems map[int64]string          // userID -> last clicked folder or file path
-	awaiting      map[int64]TreeAwaiting    // userID -> pending edit/rename action
-	defaultPaths  map[int64]string          // userID -> default directory path
-	rootVisible   map[int64]bool            // userID -> whether root folder itself is shown
-	showHidden    map[int64]bool            // userID -> whether hidden files and folders are shown
-	homePath      string
+	mu               sync.RWMutex
+	rnd              *rand.Rand
+	paths            map[string]string         // token -> path
+	tokens           map[string]string         // path -> token
+	userPaths        map[int64]string          // userID -> root path
+	userMessages     map[int64]int             // userID -> message ID of active tree
+	expanded         map[int64]map[string]bool // userID -> set of expanded clean paths
+	selectedItems    map[int64]string          // userID -> last clicked folder or file path
+	awaiting         map[int64]TreeAwaiting    // userID -> pending edit/rename action
+	defaultPaths     map[int64]string          // userID -> default directory path
+	rootVisible      map[int64]bool            // userID -> whether root folder itself is shown
+	showHidden       map[int64]map[string]bool // userID -> set of folder paths with hidden items shown
+	settingsVisible  map[int64]bool            // userID -> whether settings inline keyboard is shown
+	buttonStyleEmoji bool                      // global setting: true = emoji, false = names (default)
+	homePath         string
 }
 
 // NewTreeStateManager creates a new state manager with a default home path.
@@ -88,18 +92,19 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		home = abs
 	}
 	return &TreeStateManager{
-		rnd:           rand.New(rand.NewSource(time.Now().UnixNano())),
-		paths:         make(map[string]string),
-		tokens:        make(map[string]string),
-		userPaths:     make(map[int64]string),
-		userMessages:  make(map[int64]int),
-		expanded:      make(map[int64]map[string]bool),
-		selectedItems: make(map[int64]string),
-		awaiting:      make(map[int64]TreeAwaiting),
-		defaultPaths:  make(map[int64]string),
-		rootVisible:   make(map[int64]bool),
-		showHidden:    make(map[int64]bool),
-		homePath:      filepath.Clean(home),
+		rnd:             rand.New(rand.NewSource(time.Now().UnixNano())),
+		paths:           make(map[string]string),
+		tokens:          make(map[string]string),
+		userPaths:       make(map[int64]string),
+		userMessages:    make(map[int64]int),
+		expanded:        make(map[int64]map[string]bool),
+		selectedItems:   make(map[int64]string),
+		awaiting:        make(map[int64]TreeAwaiting),
+		defaultPaths:    make(map[int64]string),
+		rootVisible:     make(map[int64]bool),
+		showHidden:      make(map[int64]map[string]bool),
+		settingsVisible: make(map[int64]bool),
+		homePath:        filepath.Clean(home),
 	}
 }
 
@@ -229,26 +234,94 @@ func (m *TreeStateManager) SetRootFolderVisible(userID int64, visible bool) {
 	m.rootVisible[userID] = visible
 }
 
-// IsShowHidden returns whether hidden files and folders are shown in the tree for userID.
-func (m *TreeStateManager) IsShowHidden(userID int64) bool {
+// IsFolderShowHidden returns whether hidden files and folders are shown in folderPath for userID.
+func (m *TreeStateManager) IsFolderShowHidden(userID int64, folderPath string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.showHidden[userID]
+	userHid, ok := m.showHidden[userID]
+	if !ok {
+		return false
+	}
+	return userHid[filepath.Clean(folderPath)]
 }
 
-// ToggleShowHidden toggles whether hidden files and folders are shown for userID.
-func (m *TreeStateManager) ToggleShowHidden(userID int64) bool {
+// ToggleFolderShowHidden toggles whether hidden files and folders are shown in folderPath for userID.
+func (m *TreeStateManager) ToggleFolderShowHidden(userID int64, folderPath string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.showHidden[userID] = !m.showHidden[userID]
-	return m.showHidden[userID]
+	userHid, ok := m.showHidden[userID]
+	if !ok {
+		userHid = make(map[string]bool)
+		m.showHidden[userID] = userHid
+	}
+	clean := filepath.Clean(folderPath)
+	if userHid[clean] {
+		delete(userHid, clean)
+		return false
+	}
+	userHid[clean] = true
+	return true
 }
 
-// SetShowHidden sets whether hidden files and folders are shown for userID.
-func (m *TreeStateManager) SetShowHidden(userID int64, show bool) {
+// SetFolderShowHidden sets whether hidden files and folders are shown in folderPath for userID.
+func (m *TreeStateManager) SetFolderShowHidden(userID int64, folderPath string, show bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.showHidden[userID] = show
+	userHid, ok := m.showHidden[userID]
+	if !ok {
+		userHid = make(map[string]bool)
+		m.showHidden[userID] = userHid
+	}
+	clean := filepath.Clean(folderPath)
+	if show {
+		userHid[clean] = true
+	} else {
+		delete(userHid, clean)
+	}
+}
+
+// IsSettingsVisible returns whether the settings inline keyboard is currently visible for userID.
+func (m *TreeStateManager) IsSettingsVisible(userID int64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settingsVisible[userID]
+}
+
+// ToggleSettingsVisible toggles whether the settings inline keyboard is visible for userID.
+func (m *TreeStateManager) ToggleSettingsVisible(userID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settingsVisible[userID] = !m.settingsVisible[userID]
+	return m.settingsVisible[userID]
+}
+
+// SetSettingsVisible sets whether the settings inline keyboard is visible for userID.
+func (m *TreeStateManager) SetSettingsVisible(userID int64, visible bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settingsVisible[userID] = visible
+}
+
+// IsButtonStyleEmoji returns whether the global button style is emoji (true) or names (false, default).
+func (m *TreeStateManager) IsButtonStyleEmoji() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.buttonStyleEmoji
+}
+
+// ToggleButtonStyleEmoji toggles the global button style between names (false) and emoji (true).
+func (m *TreeStateManager) ToggleButtonStyleEmoji() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.buttonStyleEmoji = !m.buttonStyleEmoji
+	return m.buttonStyleEmoji
+}
+
+// SetButtonStyleEmoji sets the global button style (true = emoji, false = names).
+func (m *TreeStateManager) SetButtonStyleEmoji(emoji bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.buttonStyleEmoji = emoji
 }
 
 // GetDefaultPath returns the default tree directory for userID.
@@ -325,6 +398,8 @@ func (m *TreeStateManager) ClearUserMessage(userID int64) {
 	delete(m.expanded, userID)
 	delete(m.selectedItems, userID)
 	delete(m.awaiting, userID)
+	delete(m.showHidden, userID)
+	delete(m.settingsVisible, userID)
 }
 
 // SetAwaiting records pending action awaiting user input.
@@ -447,6 +522,7 @@ func (a *App) openTreeAtPath(ctx context.Context, b *bot.Bot, chatID int64, user
 	}
 
 	a.TreeState.ClearExpanded(user.ID)
+	a.TreeState.SetSettingsVisible(user.ID, false)
 	a.TreeState.SetSelectedFolder(user.ID, selectedItem)
 	a.TreeState.SetUserPath(user.ID, dirPath)
 	richHTML, err := a.buildTreeRichMessageHTML(dirPath, user.ID)
@@ -461,6 +537,7 @@ func (a *App) openTreeAtPath(ctx context.Context, b *bot.Bot, chatID int64, user
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.treeInlineKeyboard(user.ID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(user.ID, msg.ID)
@@ -573,6 +650,7 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 
 	if a.TreeState != nil {
 		a.TreeState.SetRootFolderVisible(user.ID, true)
+		a.TreeState.SetSettingsVisible(user.ID, false)
 	}
 
 	if fi.IsDir() {
@@ -594,6 +672,7 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 				RichMessage: models.InputRichMessage{
 					HTML: richHTML,
 				},
+				ReplyMarkup: a.treeInlineKeyboard(user.ID),
 			})
 			if sendErr == nil && msg != nil {
 				a.TreeState.SetUserMessage(user.ID, msg.ID)
@@ -622,6 +701,7 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.treeInlineKeyboard(user.ID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(user.ID, msg.ID)
@@ -673,16 +753,53 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 		})
 		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
 
-	case data == cbTreeHid:
+	case data == cbTreeCfg:
+		if a.TreeState != nil {
+			a.TreeState.ToggleSettingsVisible(cq.From.ID)
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return err
+		})
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
+
+	case data == cbTreeStyle:
+		isEmoji := false
+		if a.TreeState != nil {
+			isEmoji = a.TreeState.ToggleButtonStyleEmoji()
+		}
+		toastText := "Button style: names"
+		if isEmoji {
+			toastText = "Button style: emoji"
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            toastText,
+			})
+			return err
+		})
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
+
+	case strings.HasPrefix(data, cbTreeHid):
+		tok := strings.TrimPrefix(data, cbTreeHid)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Directory reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
 		show := false
 		if a.TreeState != nil {
-			show = a.TreeState.ToggleShowHidden(cq.From.ID)
-			if !show {
-				sel := a.TreeState.GetSelectedItem(cq.From.ID)
-				if sel != "" && isHiddenPath(sel) {
-					a.TreeState.SetSelectedItem(cq.From.ID, "")
-				}
-			}
+			show = a.TreeState.ToggleFolderShowHidden(cq.From.ID, targetPath)
 		}
 		toastText := "Showing hidden files"
 		if !show {
@@ -1394,6 +1511,27 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 	}
 }
 
+// treeInlineKeyboard returns the settings inline keyboard when visible, or nil otherwise.
+func (a *App) treeInlineKeyboard(userID int64) models.ReplyMarkup {
+	if a.TreeState == nil || !a.TreeState.IsSettingsVisible(userID) {
+		return nil
+	}
+	label := "Button style: names"
+	if a.TreeState.IsButtonStyleEmoji() {
+		label = "Button style: emoji"
+	}
+	return &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{
+					Text:         label,
+					CallbackData: cbTreeStyle,
+				},
+			},
+		},
+	}
+}
+
 // editTreeMessage updates the tree rich message in-place using rich_message.
 func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, messageID int, userID int64) error {
 	curPath := a.TreeState.GetUserPath(userID)
@@ -1410,6 +1548,7 @@ func (a *App) editTreeMessage(ctx context.Context, b *bot.Bot, chatID int64, mes
 			RichMessage: &models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.treeInlineKeyboard(userID),
 		})
 		if editErr != nil && strings.Contains(editErr.Error(), "message is not modified") {
 			return nil
@@ -1455,6 +1594,7 @@ func (a *App) sendUpdatedTreeMessage(ctx context.Context, b *bot.Bot, chatID, us
 			RichMessage: models.InputRichMessage{
 				HTML: richHTML,
 			},
+			ReplyMarkup: a.treeInlineKeyboard(userID),
 		})
 		if sendErr == nil && msg != nil {
 			a.TreeState.SetUserMessage(userID, msg.ID)
@@ -1533,20 +1673,20 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	sb.WriteString("</p>\n")
 
 	showBack := a.shouldShowBackButton(userID, cleanPath)
-	showHidden := false
+	settingsOpen := false
 	if a.TreeState != nil {
-		showHidden = a.TreeState.IsShowHidden(userID)
-	}
-	toggleHiddenLabel := "show hidden"
-	if showHidden {
-		toggleHiddenLabel = "hide hidden"
+		settingsOpen = a.TreeState.IsSettingsVisible(userID)
 	}
 
 	sb.WriteString("<tg-button-row align=\"left\">\n")
 	if showBack {
-		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n")
+		sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" data=\"t:home\">%s</tg-button>\n", a.backButtonLabel()))
 	}
-	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" data=\"t:hid\">%s</tg-button>\n", toggleHiddenLabel))
+	if settingsOpen {
+		sb.WriteString("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:cfg\">⚙</tg-button>\n")
+	} else {
+		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:cfg\">⚙</tg-button>\n")
+	}
 	sb.WriteString("</tg-button-row>\n")
 
 	// If an item (folder or file) has been clicked, add action buttons in a row preceded by a divider line
@@ -1562,21 +1702,22 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 			sb.WriteString("<p><code>" + html.EscapeString(tildePath) + "</code></p>\n")
 			sb.WriteString("<tg-button-row align=\"left\">\n")
 			sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
-				html.EscapeString(sel), copyButtonLabel(sel)))
+				html.EscapeString(sel), a.copyButtonLabel(sel)))
 			if fi.IsDir() {
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">download folder</tg-button>\n", tok))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">%s</tg-button>\n", tok, a.downloadFolderLabel()))
 				if hasGit(sel) {
-					sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:gzip:%s\">adv dl</tg-button>\n", tok))
+					sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:gzip:%s\">%s</tg-button>\n", tok, a.advDlLabel()))
 				}
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:hid:%s\">%s</tg-button>\n", tok, a.toggleHiddenLabel(userID, sel)))
 				sb.WriteString("</tg-button-row>\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">download file</tg-button>\n", tok))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">%s</tg-button>\n", tok, a.downloadFileLabel()))
 				sb.WriteString("</tg-button-row>\n")
 				sb.WriteString("<hr/>\n")
 				sb.WriteString("<p>file operations:</p>\n")
 				sb.WriteString("<tg-button-row align=\"left\">\n")
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">rename</tg-button>\n", tok))
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">edit</tg-button>\n", tok))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">%s</tg-button>\n", tok, a.renameFileLabel()))
+				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">%s</tg-button>\n", tok, a.editFileLabel()))
 				sb.WriteString("</tg-button-row>\n")
 			}
 		}
@@ -1596,7 +1737,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 	selectedItem := a.TreeState.GetSelectedItem(userID)
 	showHidden := false
 	if a.TreeState != nil {
-		showHidden = a.TreeState.IsShowHidden(userID)
+		showHidden = a.TreeState.IsFolderShowHidden(userID, dirPath)
 	}
 
 	var dirs []os.DirEntry
@@ -1748,6 +1889,73 @@ func formatTildePath(path, home, root string) string {
 
 func copyButtonLabel(path string) string {
 	return "copy full path"
+}
+
+func (a *App) isEmojiStyle() bool {
+	return a.TreeState != nil && a.TreeState.IsButtonStyleEmoji()
+}
+
+func (a *App) backButtonLabel() string {
+	if a.isEmojiStyle() {
+		return "🔙"
+	}
+	return "back"
+}
+
+func (a *App) copyButtonLabel(path string) string {
+	if a.isEmojiStyle() {
+		return "📋"
+	}
+	return "copy full path"
+}
+
+func (a *App) downloadFolderLabel() string {
+	if a.isEmojiStyle() {
+		return "📥"
+	}
+	return "download folder"
+}
+
+func (a *App) advDlLabel() string {
+	if a.isEmojiStyle() {
+		return "📦"
+	}
+	return "adv dl"
+}
+
+func (a *App) toggleHiddenLabel(userID int64, folderPath string) string {
+	show := a.TreeState != nil && a.TreeState.IsFolderShowHidden(userID, folderPath)
+	if a.isEmojiStyle() {
+		if show {
+			return "🙈"
+		}
+		return "👁"
+	}
+	if show {
+		return "hide hidden"
+	}
+	return "show hidden"
+}
+
+func (a *App) downloadFileLabel() string {
+	if a.isEmojiStyle() {
+		return "📥"
+	}
+	return "download file"
+}
+
+func (a *App) renameFileLabel() string {
+	if a.isEmojiStyle() {
+		return "🏷️"
+	}
+	return "rename"
+}
+
+func (a *App) editFileLabel() string {
+	if a.isEmojiStyle() {
+		return "✏️"
+	}
+	return "edit"
 }
 
 // buildFileRichMessageHTML formats the message sent when a file is selected.
