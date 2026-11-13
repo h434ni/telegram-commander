@@ -411,7 +411,54 @@ func TestBuildTreeRichMessageHTML_RootVisibleAndBackButton(t *testing.T) {
 	// 3. Action buttons for targetdir
 	require.Contains(t, html, "copy full path")
 	require.Contains(t, html, "download folder")
-	// 4. Transparent back button right after the tree without additional separator line
-	require.Contains(t, html, "</p>\n<tg-button-row align=\"left\">\n  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n</tg-button-row>")
+	// 4. Transparent back button and show hidden button right after the tree without additional separator line
+	require.Contains(t, html, `data="t:home">back</tg-button>`)
+	require.Contains(t, html, `data="t:hid">show hidden</tg-button>`)
 	require.True(t, strings.Index(html, `data="t:home">back</tg-button>`) < strings.Index(html, "copy full path"), "back button should appear before action buttons")
+}
+
+func TestTreeShowHiddenToggle(t *testing.T) {
+	tempDir := t.TempDir()
+	app := &App{
+		TreeState: NewTreeStateManager(tempDir),
+	}
+
+	// Create normal file, dotfile, and dot-directory with an inner file
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "visible.txt"), []byte("visible"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".hidden_file"), []byte("secret"), 0o644))
+	dotDir := filepath.Join(tempDir, ".hidden_dir")
+	require.NoError(t, os.MkdirAll(dotDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dotDir, "inside.txt"), []byte("inner"), 0o644))
+
+	userID := int64(99)
+
+	// 1. By default, hidden files and folders should NOT be shown
+	html, err := app.buildTreeRichMessageHTML(tempDir, userID)
+	require.NoError(t, err)
+	require.Contains(t, html, "visible.txt")
+	require.NotContains(t, html, ".hidden_file")
+	require.NotContains(t, html, ".hidden_dir")
+	require.Contains(t, html, `data="t:hid">show hidden</tg-button>`)
+
+	// 2. Toggle to show hidden files
+	nowShow := app.TreeState.ToggleShowHidden(userID)
+	require.True(t, nowShow)
+
+	htmlShow, err := app.buildTreeRichMessageHTML(tempDir, userID)
+	require.NoError(t, err)
+	require.Contains(t, htmlShow, "visible.txt")
+	require.Contains(t, htmlShow, ".hidden_file")
+	require.Contains(t, htmlShow, ".hidden_dir")
+	require.Contains(t, htmlShow, `data="t:hid">hide hidden</tg-button>`)
+
+	// 3. Toggle back to hide hidden files
+	nowShow = app.TreeState.ToggleShowHidden(userID)
+	require.False(t, nowShow)
+
+	htmlHide, err := app.buildTreeRichMessageHTML(tempDir, userID)
+	require.NoError(t, err)
+	require.Contains(t, htmlHide, "visible.txt")
+	require.NotContains(t, htmlHide, ".hidden_file")
+	require.NotContains(t, htmlHide, ".hidden_dir")
+	require.Contains(t, htmlHide, `data="t:hid">show hidden</tg-button>`)
 }

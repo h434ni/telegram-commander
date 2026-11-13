@@ -35,6 +35,7 @@ const (
 	cbTreeRfdY   = "t:rfd:y:"
 	cbTreeRfdN   = "t:rfd:n:"
 	cbTreeHome   = "t:home"
+	cbTreeHid    = "t:hid"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
 
@@ -71,6 +72,7 @@ type TreeStateManager struct {
 	awaiting      map[int64]TreeAwaiting    // userID -> pending edit/rename action
 	defaultPaths  map[int64]string          // userID -> default directory path
 	rootVisible   map[int64]bool            // userID -> whether root folder itself is shown
+	showHidden    map[int64]bool            // userID -> whether hidden files and folders are shown
 	homePath      string
 }
 
@@ -96,6 +98,7 @@ func NewTreeStateManager(home string) *TreeStateManager {
 		awaiting:      make(map[int64]TreeAwaiting),
 		defaultPaths:  make(map[int64]string),
 		rootVisible:   make(map[int64]bool),
+		showHidden:    make(map[int64]bool),
 		homePath:      filepath.Clean(home),
 	}
 }
@@ -224,6 +227,28 @@ func (m *TreeStateManager) SetRootFolderVisible(userID int64, visible bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.rootVisible[userID] = visible
+}
+
+// IsShowHidden returns whether hidden files and folders are shown in the tree for userID.
+func (m *TreeStateManager) IsShowHidden(userID int64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.showHidden[userID]
+}
+
+// ToggleShowHidden toggles whether hidden files and folders are shown for userID.
+func (m *TreeStateManager) ToggleShowHidden(userID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.showHidden[userID] = !m.showHidden[userID]
+	return m.showHidden[userID]
+}
+
+// SetShowHidden sets whether hidden files and folders are shown for userID.
+func (m *TreeStateManager) SetShowHidden(userID int64, show bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.showHidden[userID] = show
 }
 
 // GetDefaultPath returns the default tree directory for userID.
@@ -643,6 +668,30 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
 				Text:            "Back to default directory",
+			})
+			return err
+		})
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
+
+	case data == cbTreeHid:
+		show := false
+		if a.TreeState != nil {
+			show = a.TreeState.ToggleShowHidden(cq.From.ID)
+			if !show {
+				sel := a.TreeState.GetSelectedItem(cq.From.ID)
+				if sel != "" && isHiddenPath(sel) {
+					a.TreeState.SetSelectedItem(cq.From.ID, "")
+				}
+			}
+		}
+		toastText := "Showing hidden files"
+		if !show {
+			toastText = "Hiding hidden files"
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+				Text:            toastText,
 			})
 			return err
 		})
@@ -1483,11 +1532,22 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	}
 	sb.WriteString("</p>\n")
 
-	if a.shouldShowBackButton(userID, cleanPath) {
-		sb.WriteString("<tg-button-row align=\"left\">\n")
-		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n")
-		sb.WriteString("</tg-button-row>\n")
+	showBack := a.shouldShowBackButton(userID, cleanPath)
+	showHidden := false
+	if a.TreeState != nil {
+		showHidden = a.TreeState.IsShowHidden(userID)
 	}
+	toggleHiddenLabel := "show hidden"
+	if showHidden {
+		toggleHiddenLabel = "hide hidden"
+	}
+
+	sb.WriteString("<tg-button-row align=\"left\">\n")
+	if showBack {
+		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:home\">back</tg-button>\n")
+	}
+	sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" data=\"t:hid\">%s</tg-button>\n", toggleHiddenLabel))
+	sb.WriteString("</tg-button-row>\n")
 
 	// If an item (folder or file) has been clicked, add action buttons in a row preceded by a divider line
 	if sel := a.TreeState.GetSelectedItem(userID); sel != "" {
@@ -1534,11 +1594,15 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 	}
 
 	selectedItem := a.TreeState.GetSelectedItem(userID)
+	showHidden := false
+	if a.TreeState != nil {
+		showHidden = a.TreeState.IsShowHidden(userID)
+	}
 
 	var dirs []os.DirEntry
 	var files []os.DirEntry
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
+		if !showHidden && strings.HasPrefix(e.Name(), ".") {
 			continue // hide dot-folders and dot-files
 		}
 		if e.IsDir() {
@@ -1795,6 +1859,16 @@ func createZipArchive(targetPath string, maxBytes int64) ([]byte, error) {
 func hasGit(dir string) bool {
 	fi, err := os.Stat(filepath.Join(dir, ".git"))
 	return err == nil && fi != nil
+}
+
+// isHiddenPath returns whether any component in p starts with a dot.
+func isHiddenPath(p string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // createGitZipArchive creates a zip archive using git archive for targetPath up to maxBytes.

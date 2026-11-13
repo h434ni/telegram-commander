@@ -2345,3 +2345,90 @@ func TestTreeAdvDlIntegration(t *testing.T) {
 	srv.mu.Unlock()
 	require.Contains(t, lastAns["text"], "not a git repository")
 }
+
+func TestTreeToggleShowHiddenIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "visible.txt"), []byte("normal"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".hidden.txt"), []byte("hidden"), 0o644))
+	dotDir := filepath.Join(tempDir, ".dotfolder")
+	require.NoError(t, os.MkdirAll(dotDir, 0o755))
+
+	srv := &apiServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			API:          ts.URL,
+			BotToken:     "123:ABC",
+			AllowedUsers: []string{"42"},
+		},
+		Menu: []config.ButtonNode{
+			{
+				Name:     "tg-tree",
+				Type:     "button",
+				Function: "tg-tree",
+				Path:     tempDir,
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	reg := function.NewRegistry()
+	app := bot.NewApp(cfg, reg, &executor.FakeExecutor{}, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, ts.Client()),
+		tgbot.WithServerURL(ts.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+
+	// 1. Open tree explorer
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg := msgs[len(msgs)-1]
+
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, "visible.txt")
+	require.NotContains(t, lastMsg, ".hidden.txt")
+	require.NotContains(t, lastMsg, ".dotfolder")
+	require.Contains(t, lastMsg, `data="t:hid">show hidden</tg-button>`)
+
+	// 2. Click "show hidden"
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid"))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	lastAns := srv.callbackAnswers[len(srv.callbackAnswers)-1]
+	srv.mu.Unlock()
+
+	require.Contains(t, lastAns["text"], "Showing hidden files")
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "visible.txt")
+	require.Contains(t, lastMsg, ".hidden.txt")
+	require.Contains(t, lastMsg, ".dotfolder")
+	require.Contains(t, lastMsg, `data="t:hid">hide hidden</tg-button>`)
+
+	// 3. Click "hide hidden"
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid"))
+
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	lastAns = srv.callbackAnswers[len(srv.callbackAnswers)-1]
+	srv.mu.Unlock()
+
+	require.Contains(t, lastAns["text"], "Hiding hidden files")
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "visible.txt")
+	require.NotContains(t, lastMsg, ".hidden.txt")
+	require.NotContains(t, lastMsg, ".dotfolder")
+	require.Contains(t, lastMsg, `data="t:hid">show hidden</tg-button>`)
+}
