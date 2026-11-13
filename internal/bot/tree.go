@@ -800,6 +800,11 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 		show := false
 		if a.TreeState != nil {
 			show = a.TreeState.ToggleFolderShowHidden(cq.From.ID, targetPath)
+			if show {
+				a.TreeState.SetExpanded(cq.From.ID, targetPath, true)
+			} else if sel := a.TreeState.GetSelectedItem(cq.From.ID); sel != "" && sel != targetPath && isHiddenPath(sel) {
+				a.TreeState.SetSelectedItem(cq.From.ID, targetPath)
+			}
 		}
 		toastText := "Showing hidden files"
 		if !show {
