@@ -574,6 +574,29 @@ func (a *App) resolvePathCandidate(raw string, userID int64) (string, bool, bool
 	return target, isExplicit, true
 }
 
+// applyTreePathState points the explorer at path: a directory becomes the expanded
+// visible root; for a file, its parent becomes the root and the file stays selected.
+func (a *App) applyTreePathState(userID int64, path string, fi os.FileInfo) {
+	if a.TreeState == nil {
+		return
+	}
+	a.TreeState.SetRootFolderVisible(userID, true)
+	if fi.IsDir() {
+		cleanDir := filepath.Clean(path)
+		a.TreeState.ClearExpanded(userID)
+		a.TreeState.SetExpanded(userID, cleanDir, true)
+		a.TreeState.SetSelectedFolder(userID, cleanDir)
+		a.TreeState.SetUserPath(userID, cleanDir)
+		return
+	}
+	cleanFile := filepath.Clean(path)
+	parentDir := filepath.Dir(cleanFile)
+	a.TreeState.ClearExpanded(userID)
+	a.TreeState.SetExpanded(userID, parentDir, true)
+	a.TreeState.SetSelectedFolder(userID, cleanFile)
+	a.TreeState.SetUserPath(userID, parentDir)
+}
+
 // tryOpenTreePath checks if text represents a path, and if so opens the tree explorer.
 // Returns true if handled.
 func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, user *models.User, text string) bool {
@@ -597,17 +620,10 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 		return true
 	}
 
-	if a.TreeState != nil {
-		a.TreeState.SetRootFolderVisible(user.ID, true)
-	}
+	a.applyTreePathState(user.ID, absPath, fi)
 
 	if fi.IsDir() {
 		cleanDir := filepath.Clean(absPath)
-		a.TreeState.ClearExpanded(user.ID)
-		a.TreeState.SetExpanded(user.ID, cleanDir, true)
-		a.TreeState.SetSelectedFolder(user.ID, cleanDir)
-		a.TreeState.SetUserPath(user.ID, cleanDir)
-
 		richHTML, err := a.buildTreeRichMessageHTML(cleanDir, user.ID)
 		if err != nil {
 			a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
@@ -629,13 +645,7 @@ func (a *App) tryOpenTreePath(ctx context.Context, b *bot.Bot, chatID int64, use
 		return true
 	}
 
-	cleanFile := filepath.Clean(absPath)
-	parentDir := filepath.Dir(cleanFile)
-	a.TreeState.ClearExpanded(user.ID)
-	a.TreeState.SetExpanded(user.ID, parentDir, true)
-	a.TreeState.SetSelectedFolder(user.ID, cleanFile)
-	a.TreeState.SetUserPath(user.ID, parentDir)
-
+	parentDir := filepath.Dir(filepath.Clean(absPath))
 	richHTML, err := a.buildTreeRichMessageHTML(parentDir, user.ID)
 	if err != nil {
 		a.showStatus(ctx, b, chatID, user.ID, "Cannot open directory: "+err.Error())
@@ -713,14 +723,27 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			})
 			return
 		}
+		fi, err := os.Stat(targetPath)
+		if err != nil {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Path no longer exists: " + targetPath,
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+		// Navigate to the path like a sent path message, but edit the same tree message in place.
+		a.applyTreePathState(cq.From.ID, targetPath, fi)
 		_ = a.telegramCall(ctx, chatID, func() error {
 			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 				CallbackQueryID: cq.ID,
 			})
 			return err
 		})
-		// Same flow as sending the path to the bot as a text message: open the tree at that path.
-		a.tryOpenTreePath(ctx, b, chatID, &cq.From, targetPath)
+		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
 
 	case strings.HasPrefix(data, cbTreeHid):
 		tok := strings.TrimPrefix(data, cbTreeHid)

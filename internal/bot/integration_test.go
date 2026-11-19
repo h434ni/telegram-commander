@@ -2523,13 +2523,15 @@ func TestTreeGoCursorButtonIntegration(t *testing.T) {
 	lastMsg := msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, fmt.Sprintf(`data="t:go:%s">👈</tg-button>`, tokSub))
 
-	// Click 👈: same flow as sending the directory path to the bot -> fresh tree rooted there
-	countBefore := len(msgs)
+	// Click 👈: navigates like a sent directory path, but edits the SAME tree message in place
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:go:"+tokSub))
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
+	lastRaw := srv.messages[len(srv.messages)-1]
+	deletes := srv.deletes
 	srv.mu.Unlock()
-	require.Greater(t, len(msgs), countBefore, "go cursor should send a fresh tree message like a path message")
+	require.Equal(t, "edit", lastRaw["kind"], "go cursor should edit the same tree message, not send a new one")
+	require.Equal(t, 0, deletes, "no delete-and-resend fallback should be needed")
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
 	require.Contains(t, lastMsg, fmt.Sprintf(`>subfolder/</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokSub))
@@ -2544,7 +2546,9 @@ func TestTreeGoCursorButtonIntegration(t *testing.T) {
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:go:"+tokFile))
 	srv.mu.Lock()
 	msgs = visibleTexts(srv)
+	lastRaw = srv.messages[len(srv.messages)-1]
 	srv.mu.Unlock()
+	require.Equal(t, "edit", lastRaw["kind"], "file go cursor should also edit in place")
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, fmt.Sprintf(`>inner.txt</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokFile))
 	require.Contains(t, lastMsg, `data="t:send:`)
