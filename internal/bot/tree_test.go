@@ -124,13 +124,13 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Nested directory appears closed (blue) and not selected, formatted with compact │├
 	tokNested := app.TreeState.GetToken(nestedDir)
 	require.Contains(t, html2, `│├<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button><br/>`)
-	// Action buttons for beta live in an invisible table preceded by separator hr and ~/ path
-	require.Contains(t, html2, "<table>")
+	// Action buttons for beta live in a tg-button-row preceded by separator hr and ~/ path
+	require.NotContains(t, html2, "<table>")
 	require.Contains(t, html2, "<hr/>")
 	require.Contains(t, html2, "<p><code>~/beta</code></p>")
-	require.Contains(t, html2, `<tr><td align="left">`)
-	require.Contains(t, html2, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy full path</tg-button>`)
-	require.Contains(t, html2, `<tg-button type="callback_data" data="t:zip:`+tokBeta+`">download folder</tg-button>`)
+	require.Contains(t, html2, `<tg-button-row align="left">`)
+	require.Contains(t, html2, `<tg-button type="copy_text" style="success" text="`+subBeta+`">📋</tg-button>`)
+	require.Contains(t, html2, `<tg-button type="callback_data" data="t:zip:`+tokBeta+`">📥</tg-button>`)
 
 	// 3. Press parent folder 'beta' again to close it
 	app.TreeState.ToggleExpanded(42, subBeta)
@@ -144,8 +144,8 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	// Copy and get folder buttons remain for last-clicked folder
 	require.Contains(t, html3, "<hr/>")
 	require.Contains(t, html3, "<p><code>~/beta</code></p>")
-	require.Contains(t, html3, `<tg-button type="copy_text" style="success" text="`+subBeta+`">copy full path</tg-button>`)
-	require.Contains(t, html3, `<tg-button type="callback_data" data="t:zip:`+tokBeta+`">download folder</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="copy_text" style="success" text="`+subBeta+`">📋</tg-button>`)
+	require.Contains(t, html3, `<tg-button type="callback_data" data="t:zip:`+tokBeta+`">📥</tg-button>`)
 
 	// 4. Select a file in the tree: it mixes copy path and get file buttons directly into the tree message, moving 👈 to the file
 	app.TreeState.SetSelectedItem(42, file1Path)
@@ -155,8 +155,8 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.NotContains(t, htmlFile, `>beta</tg-button> 👈`)
 	require.Contains(t, htmlFile, "<hr/>")
 	require.Contains(t, htmlFile, "<p><code>~/file1.txt</code></p>")
-	require.Contains(t, htmlFile, `<tg-button type="copy_text" style="success" text="`+file1Path+`">copy full path</tg-button>`)
-	require.Contains(t, htmlFile, `<tg-button type="callback_data" data="t:send:`+tokFile1+`">download file</tg-button>`)
+	require.Contains(t, htmlFile, `<tg-button type="copy_text" style="success" text="`+file1Path+`">📋</tg-button>`)
+	require.Contains(t, htmlFile, `<tg-button type="callback_data" data="t:send:`+tokFile1+`">📥</tg-button>`)
 }
 
 func TestCreateZipArchive(t *testing.T) {
@@ -264,26 +264,20 @@ func TestTreeAdvDlButton_Presence(t *testing.T) {
 	tokNoGit := app.TreeState.GetToken(folderNoGit)
 	tokWithGit := app.TreeState.GetToken(folderWithGit)
 
-	// Select folder without git: download folder is shown, adv dl is NOT shown
+	// Select folder without git: download is shown, adv dl is NOT shown
 	app.TreeState.SetSelectedItem(1, folderNoGit)
 	htmlNoGit, err := app.buildTreeRichMessageHTML(tempDir, 1)
 	require.NoError(t, err)
-	require.Contains(t, htmlNoGit, `data="t:zip:`+tokNoGit+`">download folder</tg-button>`)
-	require.NotContains(t, htmlNoGit, `adv dl`)
+	require.Contains(t, htmlNoGit, `data="t:zip:`+tokNoGit+`">📥</tg-button>`)
+	require.NotContains(t, htmlNoGit, `data="t:gzip:`)
 
-	// Select folder with git: download folder AND adv dl are shown
+	// Select folder with git: download AND adv dl (📥*) are shown, hidden toggle is a blue 👁 in show state
 	app.TreeState.SetSelectedItem(1, folderWithGit)
 	htmlWithGit, err := app.buildTreeRichMessageHTML(tempDir, 1)
 	require.NoError(t, err)
-	require.Contains(t, htmlWithGit, `data="t:zip:`+tokWithGit+`">download folder</tg-button>`)
-	require.Contains(t, htmlWithGit, `data="t:gzip:`+tokWithGit+`">adv dl</tg-button>`)
-
-	// Emoji style: adv dl renders as 📥* and the hidden toggle as a blue 👁
-	app.TreeState.ToggleButtonStyleEmoji()
-	htmlEmoji, err := app.buildTreeRichMessageHTML(tempDir, 1)
-	require.NoError(t, err)
-	require.Contains(t, htmlEmoji, `data="t:gzip:`+tokWithGit+`">📥*</tg-button>`)
-	require.Contains(t, htmlEmoji, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokWithGit+`">👁</tg-button>`)
+	require.Contains(t, htmlWithGit, `data="t:zip:`+tokWithGit+`">📥</tg-button>`)
+	require.Contains(t, htmlWithGit, `data="t:gzip:`+tokWithGit+`">📥*</tg-button>`)
+	require.Contains(t, htmlWithGit, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokWithGit+`">👁</tg-button>`)
 }
 
 func TestBuildFileRichMessageHTML(t *testing.T) {
@@ -415,17 +409,17 @@ func TestBuildTreeRichMessageHTML_RootVisibleAndBackButton(t *testing.T) {
 	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">targetdir/</tg-button> 👈<br/>`)
 	// 2. Child items are listed under it
 	require.Contains(t, html, "inner.txt")
-	// 3. Action buttons for targetdir (including per-folder show hidden)
-	require.Contains(t, html, "copy full path")
-	require.Contains(t, html, "download folder")
-	require.Contains(t, html, `data="t:hid:`+tokSub+`">show hidden</tg-button>`)
-	// 4. Transparent back button and settings button right after the tree without additional separator line
-	require.Contains(t, html, `data="t:home">back</tg-button>`)
-	require.Contains(t, html, `<tg-button type="callback_data" data="t:cfg">⚙</tg-button>`)
-	require.True(t, strings.Index(html, `data="t:home">back</tg-button>`) < strings.Index(html, "copy full path"), "back button should appear before action buttons")
+	// 3. Action buttons for targetdir (including per-folder hidden toggle)
+	require.Contains(t, html, `>📋</tg-button>`)
+	require.Contains(t, html, `data="t:zip:`+tokSub+`">📥</tg-button>`)
+	require.Contains(t, html, `data="t:hid:`+tokSub+`">👁</tg-button>`)
+	// 4. Transparent back button right after the tree without additional separator line; no settings button
+	require.Contains(t, html, `data="t:home">🔙</tg-button>`)
+	require.NotContains(t, html, `t:cfg`)
+	require.True(t, strings.Index(html, `data="t:home">🔙</tg-button>`) < strings.Index(html, `>📋</tg-button>`), "back button should appear before action buttons")
 }
 
-func TestTreeShowHiddenToggle_PerFolderAndSettings(t *testing.T) {
+func TestTreeShowHiddenToggle_PerFolder(t *testing.T) {
 	tempDir := t.TempDir()
 	app := &App{
 		TreeState: NewTreeStateManager(tempDir),
@@ -456,10 +450,10 @@ func TestTreeShowHiddenToggle_PerFolderAndSettings(t *testing.T) {
 	require.NotContains(t, html1, ".hiddenA.txt")
 	require.Contains(t, html1, "visibleB.txt")
 	require.NotContains(t, html1, ".hiddenB.txt")
-	require.Contains(t, html1, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokA+`">show hidden</tg-button>`)
-	// Settings button is transparent when settings keyboard is not visible, in the bottom-right table corner
-	require.Contains(t, html1, `<tg-button type="callback_data" data="t:cfg">⚙</tg-button>`)
-	require.Contains(t, html1, `<tr><td align="right"><tg-button type="callback_data" data="t:cfg">⚙</tg-button></td></tr>`)
+	// Show state: blue 👁; no settings button and no table layout
+	require.Contains(t, html1, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokA+`">👁</tg-button>`)
+	require.NotContains(t, html1, `t:cfg`)
+	require.NotContains(t, html1, "<table>")
 
 	// 2. Toggle hidden for folderA ONLY -> folderA shows .hiddenA.txt, folderB still hides .hiddenB.txt
 	nowShow := app.TreeState.ToggleFolderShowHidden(userID, subA)
@@ -469,25 +463,24 @@ func TestTreeShowHiddenToggle_PerFolderAndSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, html2, ".hiddenA.txt")
 	require.NotContains(t, html2, ".hiddenB.txt")
-	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokA+`">hide hidden</tg-button>`)
+	// Hide state: 👁 is transparent like the other action buttons
+	require.Contains(t, html2, `<tg-button type="callback_data" data="t:hid:`+tokA+`">👁</tg-button>`)
 
-	// Select folderB -> folderB shows "show hidden"
+	// Select folderB -> its toggle is blue 👁 in show state
 	app.TreeState.SetSelectedFolder(userID, subB)
 	htmlB, err := app.buildTreeRichMessageHTML(tempDir, userID)
 	require.NoError(t, err)
-	require.Contains(t, htmlB, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokB+`">show hidden</tg-button>`)
+	require.Contains(t, htmlB, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokB+`">👁</tg-button>`)
 
-	// 3. Toggle settings visibility -> ⚙ button turns blue (style="primary")
-	app.TreeState.ToggleSettingsVisible(userID)
-	htmlCfg, err := app.buildTreeRichMessageHTML(tempDir, userID)
+	// 3. Toggle folderB too -> its 👁 also turns transparent in hide state
+	app.TreeState.ToggleFolderShowHidden(userID, subB)
+	htmlB2, err := app.buildTreeRichMessageHTML(tempDir, userID)
 	require.NoError(t, err)
-	require.Contains(t, htmlCfg, `<tg-button type="callback_data" style="primary" data="t:cfg">⚙</tg-button>`)
+	require.Contains(t, htmlB2, `<tg-button type="callback_data" data="t:hid:`+tokB+`">👁</tg-button>`)
 
-	// 4. Switch global button style to emoji -> action buttons render emojis only
-	app.TreeState.ToggleButtonStyleEmoji()
-	htmlEmoji, err := app.buildTreeRichMessageHTML(tempDir, userID)
-	require.NoError(t, err)
-	require.Contains(t, htmlEmoji, `>📋</tg-button>`)
-	require.Contains(t, htmlEmoji, `data="t:zip:`+tokB+`">📥</tg-button>`)
-	require.Contains(t, htmlEmoji, `data="t:hid:`+tokB+`">👁</tg-button>`)
+	// 4. Actions are always emoji; no settings/style machinery remains
+	require.Contains(t, htmlB2, `>📋</tg-button>`)
+	require.Contains(t, htmlB2, `data="t:zip:`+tokB+`">📥</tg-button>`)
+	require.NotContains(t, htmlB2, `t:cfg`)
+	require.NotContains(t, htmlB2, `t:style`)
 }
