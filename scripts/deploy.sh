@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-# Resolve repository root from script location (portable across any machine/folder)
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BRANCH="${DEPLOY_BRANCH:-$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo "main")}"
 REMOTE="${DEPLOY_REMOTE:-origin}"
@@ -21,12 +20,14 @@ git reset --hard "$REMOTE/$BRANCH"
 echo "Compiling Go binary..."
 go build -o "$APP_NAME" ./cmd/telegram-commander
 
-if command -v pm2 >/dev/null 2>&1; then
-    echo "Restarting service in PM2..."
-    pm2 restart "$APP_NAME" || pm2 start "./$APP_NAME" --name "$APP_NAME" --cwd "$REPO_DIR" -- run --config "$CONFIG_PATH"
-elif command -v systemctl >/dev/null 2>&1; then
-    echo "Restarting via systemctl..."
-    systemctl --user restart "$APP_NAME" 2>/dev/null || sudo systemctl restart "$APP_NAME" 2>/dev/null || true
+# Install PM2 if not present
+if ! command -v pm2 >/dev/null 2>&1; then
+    echo "PM2 not found. Installing pm2 globally..."
+    npm install -g pm2 || sudo npm install -g pm2
 fi
+
+echo "Restarting service in PM2..."
+pm2 restart "$APP_NAME" || pm2 start "./$APP_NAME" --name "$APP_NAME" --cwd "$REPO_DIR" -- run --config "$CONFIG_PATH"
+pm2 save
 
 echo "=== Deployment completed successfully at $(date) ==="
