@@ -9,7 +9,7 @@ fi
 # Ensure ~/.local/bin is in PATH for uv and other tools
 export PATH="$HOME/.local/bin:$PATH"
 
-REPO_DIR="$HOME/apps/MyGithub/AvenCores-open-antigravity-patcher"
+REPO_DIR="$HOME/dev/AvenCores-open-antigravity-patcher"
 
 if [ ! -d "$REPO_DIR" ]; then
     echo "Error: Repository directory not found: $REPO_DIR" >&2
