@@ -16,6 +16,7 @@ dist/
 # Env / secrets
 .env
 *.pem
+config.yaml
 config.local.yaml
 
 # Coverage
