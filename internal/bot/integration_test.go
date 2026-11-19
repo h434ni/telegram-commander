@@ -1550,7 +1550,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	joined = strings.Join(msgs, "\n")
 	require.Contains(t, joined, "inner.txt")
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button>`, tokInner))
-	require.Contains(t, joined, ">subfolder/</tg-button> 👈<br/>")
+	require.Contains(t, joined, fmt.Sprintf(`>subfolder/</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokSub))
 	require.Contains(t, joined, "<hr/>")
 	require.Contains(t, joined, "<p><code>~/subfolder</code></p>")
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">📋</tg-button>`, subDir))
@@ -1567,8 +1567,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	lastMsg := msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "inner.txt")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button> 👈<br/>`, tokInner))
-	require.NotContains(t, lastMsg, ">subfolder/</tg-button> 👈")
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">inner.txt</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokInner, tokInner))
+	require.NotContains(t, lastMsg, `>subfolder/</tg-button> <tg-button type="callback_data" data="t:go:`)
 	require.Contains(t, lastMsg, "<hr/>")
 	require.Contains(t, lastMsg, "<p><code>~/subfolder/inner.txt</code></p>")
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">📋</tg-button>`, innerPath))
@@ -1630,8 +1630,8 @@ func TestTreeExplorerIntegration(t *testing.T) {
 
 	lastMsg = msgs[len(msgs)-1]
 	require.NotContains(t, lastMsg, "inner.txt")
-	require.Contains(t, lastMsg, ">subfolder</tg-button> 👈<br/>")
-	require.NotContains(t, lastMsg, "inner.txt</tg-button> 👈")
+	require.Contains(t, lastMsg, fmt.Sprintf(`>subfolder</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokSub))
+	require.NotContains(t, lastMsg, `inner.txt</tg-button> <tg-button type="callback_data" data="t:go:`)
 	require.Contains(t, lastMsg, "<hr/>")
 	require.Contains(t, lastMsg, "<p><code>~/subfolder</code></p>")
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">📋</tg-button>`, subDir))
@@ -2006,7 +2006,7 @@ func TestTreeEditAndRename_FolderOpenPreserved(t *testing.T) {
 	require.Contains(t, updatedTree, "subA/")
 	require.Contains(t, updatedTree, "subB/")
 	require.Contains(t, updatedTree, "item.txt")
-	require.Contains(t, updatedTree, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">item.txt</tg-button> 👈<br/>`, tokItem))
+	require.Contains(t, updatedTree, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">item.txt</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokItem, tokItem))
 
 	// 6. Rename item.txt to renamed.txt
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:ren:"+tokItem))
@@ -2030,7 +2030,7 @@ func TestTreeEditAndRename_FolderOpenPreserved(t *testing.T) {
 	require.Contains(t, updatedTreeAfterRename, "subB/")
 	require.Contains(t, updatedTreeAfterRename, "renamed.txt")
 	tokRenamed := app.TreeState.GetToken(renamedPath)
-	require.Contains(t, updatedTreeAfterRename, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">renamed.txt</tg-button> 👈<br/>`, tokRenamed))
+	require.Contains(t, updatedTreeAfterRename, fmt.Sprintf(`<tg-button type="callback_data" data="t:file:%s">renamed.txt</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokRenamed, tokRenamed))
 }
 
 func TestTreeEditMessageText_FallbackWhenUneditable(t *testing.T) {
@@ -2146,7 +2146,8 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	require.NotEmpty(t, msgs)
 	lastMsg := msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
-	require.Contains(t, lastMsg, ">subfolder/</tg-button> 👈<br/>")
+	tokSub := app.TreeState.GetToken(subDir)
+	require.Contains(t, lastMsg, fmt.Sprintf(`>subfolder/</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokSub))
 	require.Contains(t, lastMsg, "inner.txt")
 	require.Contains(t, lastMsg, `data="t:zip:`)
 	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">🔙</tg-button>`)
@@ -2169,7 +2170,8 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
 	require.Contains(t, lastMsg, ">subfolder/</tg-button><br/>")
-	require.Contains(t, lastMsg, ">inner.txt</tg-button> 👈<br/>")
+	tokFile := app.TreeState.GetToken(fileInSub)
+	require.Contains(t, lastMsg, fmt.Sprintf(`>inner.txt</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokFile))
 	require.Contains(t, lastMsg, `data="t:ren:`)
 	require.Contains(t, lastMsg, `data="t:send:`)
 	require.Contains(t, lastMsg, `data="t:ren:`)
@@ -2474,4 +2476,78 @@ func TestTreeToggleShowHiddenIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, `>📋</tg-button>`)
 	require.Contains(t, lastMsg, `data="t:zip:`+tokA+`">📥</tg-button>`)
 	require.Contains(t, lastMsg, `data="t:hid:`+tokA+`">👁</tg-button>`)
+}
+
+func TestTreeGoCursorButtonIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	subDir := filepath.Join(tempDir, "subfolder")
+	require.NoError(t, os.MkdirAll(subDir, 0o755))
+	fileInSub := filepath.Join(subDir, "inner.txt")
+	require.NoError(t, os.WriteFile(fileInSub, []byte("hello"), 0o644))
+
+	srv := &apiServer{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	cfg := &config.Config{
+		Telegram: config.TelegramConfig{
+			BotToken:     "test-token",
+			API:          server.URL,
+			AllowedUsers: []string{"42", "admin"},
+		},
+		WorkDir: tempDir,
+		Menu: []config.ButtonNode{
+			{Name: "tg-tree", Type: "button", Function: "tg-tree", Path: tempDir},
+		},
+	}
+	cfg.ApplyDefaults()
+	app := bot.NewApp(cfg, function.NewRegistry(), &executor.FakeExecutor{}, nil)
+	b, err := app.NewBotWithOptions(
+		tgbot.WithHTTPClient(5*time.Second, server.Client()),
+		tgbot.WithServerURL(server.URL),
+		tgbot.WithSkipGetMe(),
+		tgbot.WithNotAsyncHandlers(),
+	)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// Open tree and select subfolder via its toggle button
+	b.ProcessUpdate(ctx, startCommandUpdate(42, "admin", "/start"))
+	b.ProcessUpdate(ctx, textUpdate(42, "admin", "tg-tree"))
+	tokSub := app.TreeState.GetToken(subDir)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:tog:"+tokSub))
+
+	srv.mu.Lock()
+	msgs := visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg := msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, fmt.Sprintf(`data="t:go:%s">👈</tg-button>`, tokSub))
+
+	// Click 👈: same flow as sending the directory path to the bot -> fresh tree rooted there
+	countBefore := len(msgs)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:go:"+tokSub))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	require.Greater(t, len(msgs), countBefore, "go cursor should send a fresh tree message like a path message")
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, "Folder Explorer")
+	require.Contains(t, lastMsg, fmt.Sprintf(`>subfolder/</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokSub))
+	require.Contains(t, lastMsg, "inner.txt")
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">🔙</tg-button>`)
+	require.Equal(t, subDir, app.TreeState.GetUserPath(42))
+	require.True(t, app.TreeState.IsRootFolderVisible(42))
+
+	// 👈 on a file behaves like sending the file path: parent becomes root, file stays selected
+	tokFile := app.TreeState.GetToken(fileInSub)
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:file:"+tokFile))
+	b.ProcessUpdate(ctx, callbackUpdate(42, "t:go:"+tokFile))
+	srv.mu.Lock()
+	msgs = visibleTexts(srv)
+	srv.mu.Unlock()
+	lastMsg = msgs[len(msgs)-1]
+	require.Contains(t, lastMsg, fmt.Sprintf(`>inner.txt</tg-button> <tg-button type="callback_data" data="t:go:%s">👈</tg-button><br/>`, tokFile))
+	require.Contains(t, lastMsg, `data="t:send:`)
+	require.Equal(t, subDir, app.TreeState.GetUserPath(42))
+	require.Equal(t, fileInSub, app.TreeState.GetSelectedItem(42))
 }

@@ -120,7 +120,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Button stays blue (primary) but has a trailing slash and 👈 when selected/open
-	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button> 👈<br/>`)
+	require.Contains(t, html2, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta/</tg-button> <tg-button type="callback_data" data="t:go:`+tokBeta+`">👈</tg-button><br/>`)
 	// Nested directory appears closed (blue) and not selected, formatted with compact │├
 	tokNested := app.TreeState.GetToken(nestedDir)
 	require.Contains(t, html2, `│├<tg-button type="callback_data" style="primary" data="t:tog:`+tokNested+`">nested1</tg-button><br/>`)
@@ -138,7 +138,7 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	require.NoError(t, err)
 
 	// Button collapses back to primary (blue) without trailing slash, still with 👈 as last clicked
-	require.Contains(t, html3, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button> 👈<br/>`)
+	require.Contains(t, html3, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokBeta+`">beta</tg-button> <tg-button type="callback_data" data="t:go:`+tokBeta+`">👈</tg-button><br/>`)
 	// Nested items are hidden again
 	require.NotContains(t, html3, "nested1")
 	// Copy and get folder buttons remain for last-clicked folder
@@ -151,8 +151,8 @@ func TestBuildTreeRichMessageHTML_CollapseByDefaultAndToggle(t *testing.T) {
 	app.TreeState.SetSelectedItem(42, file1Path)
 	htmlFile, err := app.buildTreeRichMessageHTML(tempDir, 42)
 	require.NoError(t, err)
-	require.Contains(t, htmlFile, `<tg-button type="callback_data" data="t:file:`+tokFile1+`">file1.txt</tg-button> 👈<br/>`)
-	require.NotContains(t, htmlFile, `>beta</tg-button> 👈`)
+	require.Contains(t, htmlFile, `<tg-button type="callback_data" data="t:file:`+tokFile1+`">file1.txt</tg-button> <tg-button type="callback_data" data="t:go:`+tokFile1+`">👈</tg-button><br/>`)
+	require.NotContains(t, htmlFile, `>beta</tg-button> <tg-button type="callback_data" data="t:go:`)
 	require.Contains(t, htmlFile, "<hr/>")
 	require.Contains(t, htmlFile, "<p><code>~/file1.txt</code></p>")
 	require.Contains(t, htmlFile, `<tg-button type="copy_text" style="success" text="`+file1Path+`">📋</tg-button>`)
@@ -360,7 +360,7 @@ func TestBuildTreeRichMessageHTML_LastFolderIndentation(t *testing.T) {
 	require.NoError(t, err)
 	// Parent folder is the root last folder (branch └)
 	tokLast := app.TreeState.GetToken(lastFolder)
-	require.Contains(t, html, `└<tg-button type="callback_data" style="primary" data="t:tog:`+tokLast+`">lastfolder/</tg-button> 👈<br/>`)
+	require.Contains(t, html, `└<tg-button type="callback_data" style="primary" data="t:tog:`+tokLast+`">lastfolder/</tg-button> <tg-button type="callback_data" data="t:go:`+tokLast+`">👈</tg-button><br/>`)
 	// Children of root last folder shifted 1 space forward: "\u00a0\u00a0└"
 	tokSub := app.TreeState.GetToken(subLast)
 	require.Contains(t, html, "\u00a0\u00a0└<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:"+tokSub+"\">sublast/</tg-button><br/>")
@@ -406,7 +406,7 @@ func TestBuildTreeRichMessageHTML_RootVisibleAndBackButton(t *testing.T) {
 
 	tokSub := app.TreeState.GetToken(subDir)
 	// 1. Root folder is rendered on top with 👈
-	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">targetdir/</tg-button> 👈<br/>`)
+	require.Contains(t, html, `<tg-button type="callback_data" style="primary" data="t:tog:`+tokSub+`">targetdir/</tg-button> <tg-button type="callback_data" data="t:go:`+tokSub+`">👈</tg-button><br/>`)
 	// 2. Child items are listed under it
 	require.Contains(t, html, "inner.txt")
 	// 3. Action buttons for targetdir (including per-folder hidden toggle)

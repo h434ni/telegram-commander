@@ -36,6 +36,7 @@ const (
 	cbTreeRfdN   = "t:rfd:n:"
 	cbTreeHome   = "t:home"
 	cbTreeHid    = "t:hid:"
+	cbTreeGo     = "t:go:"
 	cbTreeRef    = "t:ref"
 	cbTreeClose  = "t:close"
 
@@ -697,6 +698,29 @@ func (a *App) handleTreeCallback(ctx context.Context, b *bot.Bot, cq *models.Cal
 			return err
 		})
 		_ = a.editTreeMessage(ctx, b, chatID, msgID, cq.From.ID)
+
+	case strings.HasPrefix(data, cbTreeGo):
+		tok := strings.TrimPrefix(data, cbTreeGo)
+		targetPath := a.TreeState.GetPath(tok)
+		if targetPath == "" {
+			_ = a.telegramCall(ctx, chatID, func() error {
+				_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+					CallbackQueryID: cq.ID,
+					Text:            "Directory reference expired. Reopen tg-tree.",
+					ShowAlert:       true,
+				})
+				return err
+			})
+			return
+		}
+		_ = a.telegramCall(ctx, chatID, func() error {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: cq.ID,
+			})
+			return err
+		})
+		// Same flow as sending the path to the bot as a text message: open the tree at that path.
+		a.tryOpenTreePath(ctx, b, chatID, &cq.From, targetPath)
 
 	case strings.HasPrefix(data, cbTreeHid):
 		tok := strings.TrimPrefix(data, cbTreeHid)
@@ -1550,7 +1574,7 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 		isOpen := a.TreeState.IsExpanded(userID, cleanPath)
 		cursor := ""
 		if cleanPath == a.TreeState.GetSelectedItem(userID) {
-			cursor = " 👈"
+			cursor = fmt.Sprintf(" <tg-button type=\"callback_data\" data=\"t:go:%s\">👈</tg-button>", tokRoot)
 		}
 		folderName := filepath.Base(cleanPath)
 		if cleanPath == "/" {
@@ -1678,7 +1702,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 
 		cursor := ""
 		if subPath == selectedItem {
-			cursor = " 👈"
+			cursor = fmt.Sprintf(" <tg-button type=\"callback_data\" data=\"t:go:%s\">👈</tg-button>", tok)
 		}
 
 		sb.WriteString(fmt.Sprintf("\u200b%s%s<tg-button type=\"callback_data\" style=\"primary\" data=\"t:tog:%s\">%s</tg-button>%s<br/>\n",
@@ -1706,7 +1730,7 @@ func (a *App) renderDirTree(sb *strings.Builder, dirPath string, prefix string, 
 
 		cursor := ""
 		if filePath == selectedItem {
-			cursor = " 👈"
+			cursor = fmt.Sprintf(" <tg-button type=\"callback_data\" data=\"t:go:%s\">👈</tg-button>", tok)
 		}
 
 		sb.WriteString(fmt.Sprintf("\u200b%s%s<tg-button type=\"callback_data\" data=\"t:file:%s\">%s</tg-button>%s<br/>\n",
