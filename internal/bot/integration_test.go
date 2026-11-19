@@ -1554,7 +1554,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, joined, "<hr/>")
 	require.Contains(t, joined, "<p><code>~/subfolder</code></p>")
 	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, subDir))
-	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">download folder</tg-button>`, tokSub))
+	require.Contains(t, joined, fmt.Sprintf(`<tg-button type="callback_data" data="t:zip:%s">download folder</tg-button>`, tokSub))
 	require.NotContains(t, joined, "🏠 Home")
 
 	// 2b. Click file button: edits tree message in place to show copy path and get file buttons
@@ -1572,10 +1572,10 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, "<hr/>")
 	require.Contains(t, lastMsg, "<p><code>~/subfolder/inner.txt</code></p>")
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, innerPath))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:send:%s">download file</tg-button>`, tokInner))
-	require.Contains(t, lastMsg, "<p>file operations:</p>")
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:ren:%s">rename</tg-button>`, tokInner))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:edit:%s">edit</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:send:%s">download file</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, `data="t:ren:`)
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:ren:%s">rename</tg-button>`, tokInner))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:edit:%s">edit</tg-button>`, tokInner))
 
 	// 2c. Click get file button to send file as document
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:send:"+tokInner))
@@ -1635,7 +1635,7 @@ func TestTreeExplorerIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, "<hr/>")
 	require.Contains(t, lastMsg, "<p><code>~/subfolder</code></p>")
 	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">copy full path</tg-button>`, subDir))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">download folder</tg-button>`, tokSub))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:zip:%s">download folder</tg-button>`, tokSub))
 
 	// 4. Click Close callback
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:close"))
@@ -1980,9 +1980,9 @@ func TestTreeEditAndRename_FolderOpenPreserved(t *testing.T) {
 	require.Contains(t, lastTree, "subA/")
 	require.Contains(t, lastTree, "subB/")
 	require.Contains(t, lastTree, "item.txt")
-	require.Contains(t, lastTree, "<p>file operations:</p>")
-	require.Contains(t, lastTree, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:ren:%s">rename</tg-button>`, tokItem))
-	require.Contains(t, lastTree, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:edit:%s">edit</tg-button>`, tokItem))
+	require.Contains(t, lastTree, `data="t:ren:`)
+	require.Contains(t, lastTree, fmt.Sprintf(`<tg-button type="callback_data" data="t:ren:%s">rename</tg-button>`, tokItem))
+	require.Contains(t, lastTree, fmt.Sprintf(`<tg-button type="callback_data" data="t:edit:%s">edit</tg-button>`, tokItem))
 
 	// 5. Edit file item.txt
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:edit:"+tokItem))
@@ -2102,7 +2102,7 @@ func TestTreeEditMessageText_FallbackWhenUneditable(t *testing.T) {
 	lastMsg := msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
 	require.Contains(t, lastMsg, "hello.txt")
-	require.Contains(t, lastMsg, "file operations:")
+	require.Contains(t, lastMsg, `data="t:ren:`)
 }
 
 func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
@@ -2170,12 +2170,12 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	require.Contains(t, lastMsg, "Folder Explorer")
 	require.Contains(t, lastMsg, ">subfolder/</tg-button><br/>")
 	require.Contains(t, lastMsg, ">inner.txt</tg-button> 👈<br/>")
-	require.Contains(t, lastMsg, "file operations:")
+	require.Contains(t, lastMsg, `data="t:ren:`)
 	require.Contains(t, lastMsg, "download file")
 	require.Contains(t, lastMsg, "rename")
 	require.Contains(t, lastMsg, "edit")
 	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:home">back</tg-button>`)
-	require.True(t, strings.Index(lastMsg, `data="t:home">back</tg-button>`) < strings.Index(lastMsg, "file operations:"), "back button should appear before file operations")
+	require.True(t, strings.Index(lastMsg, `data="t:home">back</tg-button>`) < strings.Index(lastMsg, `data="t:ren:`), "back button should appear before file operations")
 
 	// 2b. Send path with quotes/backticks
 	b.ProcessUpdate(ctx, textUpdate(42, "admin", "`"+subDir+"`"))
@@ -2203,7 +2203,7 @@ func TestTreeOpenOnUncaughtPathMessage(t *testing.T) {
 	lastMsg = msgs[len(msgs)-1]
 	require.Contains(t, lastMsg, "Folder Explorer")
 	require.Contains(t, lastMsg, "inner.txt")
-	require.Contains(t, lastMsg, "file operations:")
+	require.Contains(t, lastMsg, `data="t:ren:`)
 
 	// 2e. Send '..' to navigate back to parent folder
 	b.ProcessUpdate(ctx, textUpdate(42, "admin", ".."))
@@ -2325,8 +2325,8 @@ func TestTreeAdvDlIntegration(t *testing.T) {
 	srv.mu.Unlock()
 	lastMsg := msgs[len(msgs)-1]
 
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:zip:%s">download folder</tg-button>`, tokGit))
-	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" style="success" data="t:gzip:%s">adv dl</tg-button>`, tokGit))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:zip:%s">download folder</tg-button>`, tokGit))
+	require.Contains(t, lastMsg, fmt.Sprintf(`<tg-button type="callback_data" data="t:gzip:%s">adv dl</tg-button>`, tokGit))
 
 	// 3. Click adv dl button on git folder
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:gzip:"+tokGit))
@@ -2419,7 +2419,7 @@ func TestTreeToggleShowHiddenAndSettingsIntegration(t *testing.T) {
 	// Settings button is transparent right after the tree
 	require.Contains(t, lastMsg, `<tg-button type="callback_data" data="t:cfg">⚙</tg-button>`)
 	// Per-folder show hidden button is in the folder action section
-	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="success" data="t:hid:`+tokA+`">show hidden</tg-button>`)
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokA+`">show hidden</tg-button>`)
 
 	// 2. Click "show hidden" for folderA
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid:"+tokA))
@@ -2436,7 +2436,7 @@ func TestTreeToggleShowHiddenAndSettingsIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, ".dotfolder")
 	// folderB still hides its hidden files!
 	require.NotContains(t, lastMsg, ".hiddenB.txt")
-	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="success" data="t:hid:`+tokA+`">hide hidden</tg-button>`)
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokA+`">hide hidden</tg-button>`)
 
 	// 3. Click "hide hidden" for folderA
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:hid:"+tokA))
@@ -2451,7 +2451,7 @@ func TestTreeToggleShowHiddenAndSettingsIntegration(t *testing.T) {
 	require.Contains(t, lastMsg, "visibleA.txt")
 	require.NotContains(t, lastMsg, ".hiddenA.txt")
 	require.NotContains(t, lastMsg, ".dotfolder")
-	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="success" data="t:hid:`+tokA+`">show hidden</tg-button>`)
+	require.Contains(t, lastMsg, `<tg-button type="callback_data" style="primary" data="t:hid:`+tokA+`">show hidden</tg-button>`)
 
 	// 4. Click ⚙ button (t:cfg) to open settings inline keyboard
 	b.ProcessUpdate(ctx, callbackUpdate(42, "t:cfg"))

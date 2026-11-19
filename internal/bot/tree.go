@@ -1682,50 +1682,64 @@ func (a *App) buildTreeRichMessageHTML(rootPath string, userID int64) (string, e
 	if a.TreeState != nil {
 		settingsOpen = a.TreeState.IsSettingsVisible(userID)
 	}
-
-	sb.WriteString("<tg-button-row align=\"left\">\n")
-	if showBack {
-		sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" data=\"t:home\">%s</tg-button>\n", a.backButtonLabel()))
-	}
+	settingsButton := `<tg-button type="callback_data" data="t:cfg">⚙</tg-button>`
 	if settingsOpen {
-		sb.WriteString("  <tg-button type=\"callback_data\" style=\"primary\" data=\"t:cfg\">⚙</tg-button>\n")
-	} else {
-		sb.WriteString("  <tg-button type=\"callback_data\" data=\"t:cfg\">⚙</tg-button>\n")
+		settingsButton = `<tg-button type="callback_data" style="primary" data="t:cfg">⚙</tg-button>`
 	}
-	sb.WriteString("</tg-button-row>\n")
 
-	// If an item (folder or file) has been clicked, add action buttons in a row preceded by a divider line
-	if sel := a.TreeState.GetSelectedItem(userID); sel != "" {
-		if fi, err := os.Stat(sel); err == nil {
-			tok := a.TreeState.GetToken(sel)
-			sb.WriteString("<br/>\n<hr/>\n")
-			home := ""
-			if a.TreeState != nil {
-				home = a.TreeState.Home()
-			}
-			tildePath := formatTildePath(sel, home, cleanPath)
-			sb.WriteString("<p><code>" + html.EscapeString(tildePath) + "</code></p>\n")
-			sb.WriteString("<tg-button-row align=\"left\">\n")
-			sb.WriteString(fmt.Sprintf("  <tg-button type=\"copy_text\" style=\"success\" text=\"%s\">%s</tg-button>\n",
-				html.EscapeString(sel), a.copyButtonLabel(sel)))
-			if fi.IsDir() {
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:zip:%s\">%s</tg-button>\n", tok, a.downloadFolderLabel()))
-				if hasGit(sel) {
-					sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:gzip:%s\">%s</tg-button>\n", tok, a.advDlLabel()))
-				}
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:hid:%s\">%s</tg-button>\n", tok, a.toggleHiddenLabel(userID, sel)))
-				sb.WriteString("</tg-button-row>\n")
-			} else {
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:send:%s\">%s</tg-button>\n", tok, a.downloadFileLabel()))
-				sb.WriteString("</tg-button-row>\n")
-				sb.WriteString("<hr/>\n")
-				sb.WriteString("<p>file operations:</p>\n")
-				sb.WriteString("<tg-button-row align=\"left\">\n")
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:ren:%s\">%s</tg-button>\n", tok, a.renameFileLabel()))
-				sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" style=\"success\" data=\"t:edit:%s\">%s</tg-button>\n", tok, a.editFileLabel()))
-				sb.WriteString("</tg-button-row>\n")
-			}
+	sel := a.TreeState.GetSelectedItem(userID)
+	var selInfo os.FileInfo
+	if sel != "" {
+		selInfo, _ = os.Stat(sel)
+	}
+
+	// Back button right after the tree; settings stays here only while no item is selected.
+	if showBack || selInfo == nil {
+		sb.WriteString("<tg-button-row align=\"left\">\n")
+		if showBack {
+			sb.WriteString(fmt.Sprintf("  <tg-button type=\"callback_data\" data=\"t:home\">%s</tg-button>\n", a.backButtonLabel()))
 		}
+		if selInfo == nil {
+			sb.WriteString("  " + settingsButton + "\n")
+		}
+		sb.WriteString("</tg-button-row>\n")
+	}
+
+	// If an item (folder or file) has been clicked, show its action buttons inside an
+	// invisible (borderless) table preceded by a divider line. Copy keeps its color,
+	// the hidden toggle is blue, everything else is transparent. Settings sits alone
+	// in the bottom-right corner of the table.
+	if selInfo != nil {
+		tok := a.TreeState.GetToken(sel)
+		sb.WriteString("<br/>\n<hr/>\n")
+		home := ""
+		if a.TreeState != nil {
+			home = a.TreeState.Home()
+		}
+		tildePath := formatTildePath(sel, home, cleanPath)
+		sb.WriteString("<p><code>" + html.EscapeString(tildePath) + "</code></p>\n")
+		sb.WriteString("<table>\n")
+		sb.WriteString("  <tr><td align=\"left\">")
+		sb.WriteString(fmt.Sprintf(`<tg-button type="copy_text" style="success" text="%s">%s</tg-button>`,
+			html.EscapeString(sel), a.copyButtonLabel(sel)))
+		if selInfo.IsDir() {
+			sb.WriteString(fmt.Sprintf(`<tg-button type="callback_data" data="t:zip:%s">%s</tg-button>`, tok, a.downloadFolderLabel()))
+			if hasGit(sel) {
+				sb.WriteString(fmt.Sprintf(`<tg-button type="callback_data" data="t:gzip:%s">%s</tg-button>`, tok, a.advDlLabel()))
+			}
+			sb.WriteString(fmt.Sprintf(`<tg-button type="callback_data" style="primary" data="t:hid:%s">%s</tg-button>`, tok, a.toggleHiddenLabel(userID, sel)))
+		} else {
+			sb.WriteString(fmt.Sprintf(`<tg-button type="callback_data" data="t:send:%s">%s</tg-button>`, tok, a.downloadFileLabel()))
+		}
+		sb.WriteString("</td></tr>\n")
+		if !selInfo.IsDir() {
+			sb.WriteString("  <tr><td align=\"left\">")
+			sb.WriteString(fmt.Sprintf(`<tg-button type="callback_data" data="t:ren:%s">%s</tg-button>`, tok, a.renameFileLabel()))
+			sb.WriteString(fmt.Sprintf(`<tg-button type="callback_data" data="t:edit:%s">%s</tg-button>`, tok, a.editFileLabel()))
+			sb.WriteString("</td></tr>\n")
+		}
+		sb.WriteString("  <tr><td align=\"right\">" + settingsButton + "</td></tr>\n")
+		sb.WriteString("</table>\n")
 	}
 
 	return sb.String(), nil
@@ -1923,19 +1937,16 @@ func (a *App) downloadFolderLabel() string {
 
 func (a *App) advDlLabel() string {
 	if a.isEmojiStyle() {
-		return "📦"
+		return "📥*"
 	}
 	return "adv dl"
 }
 
 func (a *App) toggleHiddenLabel(userID int64, folderPath string) string {
-	show := a.TreeState != nil && a.TreeState.IsFolderShowHidden(userID, folderPath)
 	if a.isEmojiStyle() {
-		if show {
-			return "🙈"
-		}
 		return "👁"
 	}
+	show := a.TreeState != nil && a.TreeState.IsFolderShowHidden(userID, folderPath)
 	if show {
 		return "hide hidden"
 	}
